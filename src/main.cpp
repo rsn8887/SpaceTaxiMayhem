@@ -256,6 +256,17 @@ static void drawTinyOutlinedC(int cx, int y, const std::string& s, uint32_t c) {
     tinyText(x, y, s.c_str(), [&](int px, int py) { pset(px, py, c); });
 }
 
+// on-screen button names (SDL's "A"/"B" are Cross/Circle on the PS Vita)
+#if defined(__vita__)
+#define JOIN_LABEL "X"
+#define GEAR_LABEL "X/O"
+#define QUIT_LABEL "O"
+#else
+#define JOIN_LABEL "A"
+#define GEAR_LABEL "A/B"
+#define QUIT_LABEL "B"
+#endif
+
 // ------------------------------------------------------------------ sprites
 // Taxi, facing right. Y body, y shadow, H highlight, W/w windows, K dark, L roof sign,
 // G/g grey metal, R headlight, T tail light
@@ -1860,7 +1871,7 @@ static void drawHud() {
         const Player& p = P[i];
         rectf(x0, Y, 1, HUDH - 1, i ? rgb(60, 60, 80) : rgb(30, 30, 46));
         if (!p.joined) {
-            drawText(x0 + 4, Y + 4, "PRESS A", rgb(90, 90, 110), 0);
+            drawText(x0 + 4, Y + 4, "PRESS " JOIN_LABEL, rgb(90, 90, 110), 0);
             continue;
         }
         drawText(x0 + 4, Y, hudMoneyText(p), p.alive && p.pass >= 0 ? PCOL[i].light : PCOL[i].main);
@@ -1921,7 +1932,7 @@ static void drawStandings(int y0) {
     }
 }
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__)
 #define START_LABEL "+"
 #else
 #define START_LABEL "START"
@@ -1966,10 +1977,12 @@ static void drawTitle() {
     }
     char buf[40]; snprintf(buf, sizeof buf, "< START LEVEL %02d >", startLevel_ + 1);
     drawTextC(SW / 2, 200, buf, rgb(255, 210, 60));
-    drawTextC(SW / 2, 212, numJoined() ? "PRESS " START_LABEL " TO PLAY" : "PRESS A TO JOIN", ((int)(tglobal * 3) & 1) ? rgb(255, 255, 255) : rgb(120, 255, 120));
-    drawTextC(SW / 2, 226, "DPAD THRUST  A/B GEAR", rgb(140, 140, 170), 0);
-#ifdef __SWITCH__
+    drawTextC(SW / 2, 212, numJoined() ? "PRESS " START_LABEL " TO PLAY" : "PRESS " JOIN_LABEL " TO JOIN", ((int)(tglobal * 3) & 1) ? rgb(255, 255, 255) : rgb(120, 255, 120));
+    drawTextC(SW / 2, 226, "DPAD THRUST  " GEAR_LABEL " GEAR", rgb(140, 140, 170), 0);
+#if defined(__SWITCH__)
     drawTextC(SW / 2, 88, "SINGLE JOY-CONS: HOLD SIDEWAYS", rgb(110, 110, 140), 0);
+#elif defined(__vita__)
+    drawTextC(SW / 2, 88, "PS TV: UP TO 4 CONTROLLERS", rgb(110, 110, 140), 0);
 #else
     drawTextC(SW / 2, 88, "KEYS: ARROWS+SPACE  WASD+SHIFT", rgb(110, 110, 140), 0);
 #endif
@@ -2002,7 +2015,7 @@ static void render() {
     } else if (gstate == GS_PAUSE) {
         banner(90, 50);
         drawFancyText(SW / 2, 98, "PAUSED", 16, rgb(255, 255, 255), rgb(170, 200, 255), rgb(80, 100, 200), rgb(0, 0, 40));
-        drawTextC(SW / 2, 122, START_LABEL " RESUME   B QUIT", rgb(200, 200, 220));
+        drawTextC(SW / 2, 122, START_LABEL " RESUME   " QUIT_LABEL " QUIT", rgb(200, 200, 220));
     }
 }
 
@@ -2815,7 +2828,7 @@ static int runSelfTest() {
 
 int main(int argc, char** argv) {
     // debug / test modes
-    int shotLevel = -1, shotFrames = 240, shotPlayers = 5; const char* shotPath = nullptr; bool titleShot = false, iconShot = false, selfTest = false, sceneShot = false, dmgShot = false;
+    int shotLevel = -1, shotFrames = 240, shotPlayers = 5; const char* shotPath = nullptr; bool titleShot = false, iconShot = false, selfTest = false, sceneShot = false, dmgShot = false, liveShot = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--shot") && i + 2 < argc) { shotLevel = atoi(argv[i + 1]) - 1; shotPath = argv[i + 2]; i += 2; headless = true; }
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) shotFrames = atoi(argv[++i]);
@@ -2825,6 +2838,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--selftest")) { selfTest = true; headless = true; }
         else if (!strcmp(argv[i], "--scene-shot") && i + 1 < argc) { sceneShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--dmg-shot") && i + 1 < argc) { dmgShot = true; shotPath = argv[++i]; headless = true; }
+        else if (!strcmp(argv[i], "--livearea-shot") && i + 1 < argc) { liveShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--title-shot") && i + 1 < argc) { titleShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--icon-shot") && i + 1 < argc) { iconShot = true; shotPath = argv[++i]; headless = true; }
     }
@@ -2833,8 +2847,10 @@ int main(int argc, char** argv) {
 #endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     if (TTF_Init() != 0) { fprintf(stderr, "TTF_Init: %s\n", TTF_GetError()); return 1; }
-#ifdef __SWITCH__
+#if defined(__SWITCH__)
     assetDir = "romfs:/";
+#elif defined(__vita__)
+    assetDir = "app0:/assets/";          // packed into the .vpk
 #else
     char* base = SDL_GetBasePath();
     std::string baseDir = base ? base : "./";
@@ -2850,7 +2866,7 @@ int main(int argc, char** argv) {
     font16 = TTF_OpenFont(fontPath.c_str(), 16);
     font24 = TTF_OpenFont(fontPath.c_str(), 24);
     if (!font8) fprintf(stderr, "warning: font not found (%s)\n", fontPath.c_str());
-#ifndef __SWITCH__
+#if !defined(__SWITCH__) && !defined(__vita__)
     SDL_GameControllerAddMappingsFromFile((assetDir + "gamecontrollerdb.txt").c_str());
 #endif
 
@@ -2864,6 +2880,14 @@ int main(int argc, char** argv) {
         if (selfTest) return runSelfTest();
         if (sceneShot) { renderScene(); saveShot(shotPath); return 0; }
         if (dmgShot) { renderDmgBackground(); saveShot(shotPath); return 0; }
+        if (liveShot) {
+            // PS Vita LiveArea background art: 420x250, scaled 2x to 840x500 by the build tools
+            std::vector<uint32_t> bg(420 * 250);
+            genBackground(THEMES[0], bg.data(), 420, 250, 77);
+            SDL_Surface* sfc = SDL_CreateRGBSurfaceWithFormatFrom(bg.data(), 420, 250, 32, 420 * 4, SDL_PIXELFORMAT_ARGB8888);
+            SDL_SaveBMP(sfc, shotPath); SDL_FreeSurface(sfc);
+            return 0;
+        }
         if (iconShot) {
             // 64x64 icon scene (no text) in the top-left of the framebuffer, scaled 4x to 256x256
             // for the Switch Homebrew Menu: a taxi flying in toward a pad where a passenger waves.
@@ -2956,17 +2980,38 @@ int main(int argc, char** argv) {
 
     audio.init(assetDir);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-#ifdef __SWITCH__
+#if defined(__SWITCH__)
     SDL_Window* win = SDL_CreateWindow("Space Taxi Mayhem", 0, 0, 1280, 720, 0);   // always fullscreen 720p
+#elif defined(__vita__)
+    SDL_Window* win = SDL_CreateWindow("Space Taxi Mayhem", 0, 0, 960, 544, 0);    // Vita screen
 #else
     SDL_Window* win = SDL_CreateWindow("Space Taxi Mayhem", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SW * 3, SH * 3, SDL_WINDOW_RESIZABLE);
 #endif
     if (!win) { fprintf(stderr, "window: %s\n", SDL_GetError()); return 1; }
+#if defined(__vita__)
+    // use SDL's native GXM renderer (precompiled shaders) rather than OpenGL ES via vitaGL,
+    // which would need the runtime shader compiler (libshacccg.suprx) on the console
+    SDL_SetHint(SDL_HINT_RENDER_DRIVER, "VITA gxm");
+#endif
     SDL_Renderer* ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!ren) ren = SDL_CreateRenderer(win, -1, 0);
     SDL_RenderSetLogicalSize(ren, SW, SH);
+#if defined(__vita__) || defined(SHARP_BILINEAR)
+    // fill the Vita's 544 px height with the 4:3 image (725x544, black bars left/right)
+    SDL_RenderSetIntegerScale(ren, SDL_FALSE);
+#else
     SDL_RenderSetIntegerScale(ren, SDL_TRUE);    // crisp pixels: 3x = 960x720 on Switch
+#endif
     SDL_Texture* tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SW, SH);
+#if defined(__vita__) || defined(SHARP_BILINEAR)
+    // "sharp bilinear": the frame is first scaled an exact 2x with nearest-neighbour into
+    // a 640x480 render target (crisp square pixels), and only that is smoothed (bilinear)
+    // for the last 1.13x up to 725x544, so just the pixel edges are slightly soft.
+    SDL_SetTextureScaleMode(tex, SDL_ScaleModeNearest);
+    SDL_Texture* tex2x = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, SW * 2, SH * 2);
+    if (tex2x) SDL_SetTextureScaleMode(tex2x, SDL_ScaleModeLinear);
+    else SDL_SetTextureScaleMode(tex, SDL_ScaleModeLinear);   // no render targets: plain bilinear
+#endif
     for (int i = 0; i < SDL_NumJoysticks(); i++) openController(i);
 
     bool running = true;
@@ -3009,11 +3054,24 @@ int main(int argc, char** argv) {
         SDL_RenderClear(ren);
         SDL_Rect dst{0, 0, SW, SH};
         if (shakeT > 0 && gstate != GS_TITLE) { dst.x = rng.i(5) - 2; dst.y = rng.i(5) - 2; }
+#if defined(__vita__) || defined(SHARP_BILINEAR)
+        if (tex2x) {
+            SDL_SetRenderTarget(ren, tex2x);
+            SDL_RenderCopy(ren, tex, nullptr, nullptr);      // exact 2x, nearest
+            SDL_SetRenderTarget(ren, nullptr);
+            SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+            SDL_RenderClear(ren);
+            SDL_RenderCopy(ren, tex2x, nullptr, &dst);      // remaining 1.13x, bilinear
+        } else
+#endif
         SDL_RenderCopy(ren, tex, nullptr, &dst);
         SDL_RenderPresent(ren);
     }
     audio.shutdown();
     for (auto* gc : controllers) SDL_GameControllerClose(gc);
+#if defined(__vita__) || defined(SHARP_BILINEAR)
+    if (tex2x) SDL_DestroyTexture(tex2x);
+#endif
     SDL_DestroyTexture(tex); SDL_DestroyRenderer(ren); SDL_DestroyWindow(win);
     TTF_Quit(); SDL_Quit();
 #ifdef __SWITCH__

@@ -9,13 +9,17 @@
 #   cmake -S . -B build-switch -DPLATFORM=SWITCH && cmake --build build-switch
 #   -> build-switch/spacetaxi.nro  (assets/ packed into the .nro as RomFS)
 #
+# PS Vita (VitaSDK, needs VITASDK set; runs on Vitas with custom firmware / HENkaku):
+#   cmake -S . -B build-vita -DPLATFORM=VITA && cmake --build build-vita
+#   -> build-vita/SpaceTaxiMayhem.vpk  (assets/ packed in as app0:/assets)
+#
 # Passing devkitPro's toolchain directly works too:
 #   cmake -B build-switch -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/Switch.cmake
 #   (or use the aarch64-none-elf-cmake wrapper)
 cmake_minimum_required(VERSION 3.16)
 
-set(PLATFORM "DESKTOP" CACHE STRING "Target platform: DESKTOP or SWITCH")
-set_property(CACHE PLATFORM PROPERTY STRINGS DESKTOP SWITCH)
+set(PLATFORM "DESKTOP" CACHE STRING "Target platform: DESKTOP, SWITCH or VITA")
+set_property(CACHE PLATFORM PROPERTY STRINGS DESKTOP SWITCH VITA)
 string(TOUPPER "${PLATFORM}" PLATFORM_UC)
 
 # The toolchain must be chosen before project()
@@ -26,14 +30,23 @@ if(PLATFORM_UC STREQUAL "SWITCH" AND NOT CMAKE_TOOLCHAIN_FILE)
   endif()
   set(CMAKE_TOOLCHAIN_FILE "$ENV{DEVKITPRO}/cmake/Switch.cmake" CACHE FILEPATH "devkitPro Switch toolchain")
 endif()
+if(PLATFORM_UC STREQUAL "VITA" AND NOT CMAKE_TOOLCHAIN_FILE)
+  if(NOT DEFINED ENV{VITASDK})
+    message(FATAL_ERROR "PLATFORM=VITA needs the VITASDK environment variable "
+                        "(e.g. export VITASDK=/usr/local/vitasdk)")
+  endif()
+  set(CMAKE_TOOLCHAIN_FILE "$ENV{VITASDK}/share/vita.toolchain.cmake" CACHE FILEPATH "VitaSDK toolchain")
+endif()
 
 project(SpaceTaxiMayhem VERSION 1.1.0 LANGUAGES C CXX)
 
-# Also recognise a Switch build configured via the toolchain file alone
+# Also recognise Switch / Vita builds configured via the toolchain file alone
 if(NINTENDO_SWITCH)
   set(PLATFORM_UC "SWITCH")
-elseif(PLATFORM_UC STREQUAL "SWITCH")
-  message(FATAL_ERROR "PLATFORM=SWITCH but the devkitPro Switch toolchain is not active "
+elseif(VITA)
+  set(PLATFORM_UC "VITA")
+elseif(PLATFORM_UC STREQUAL "SWITCH" OR PLATFORM_UC STREQUAL "VITA")
+  message(FATAL_ERROR "PLATFORM=${PLATFORM_UC} but its toolchain is not active "
                       "(delete the build folder and configure again)")
 endif()
 
@@ -75,6 +88,58 @@ if(PLATFORM_UC STREQUAL "SWITCH")
     ICON  "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
     ROMFS spacetaxi_romfs)
   # -> ${CMAKE_BINARY_DIR}/spacetaxi.nro
+
+elseif(PLATFORM_UC STREQUAL "VITA")
+  # ---------------------------------------------------------------- PS Vita
+  # VitaSDK's toolchain defines __vita__ and links with -Wl,-q. SDL2 + SDL2_ttf (and
+  # freetype, harfbuzz, the Sce* system stubs, ...) come from VitaSDK's packages via
+  # arm-vita-eabi-pkg-config and are linked statically.
+  include("${VITASDK}/share/vita.cmake" REQUIRED)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(SDL REQUIRED SDL2_ttf sdl2)
+  target_include_directories(spacetaxi PRIVATE ${SDL_STATIC_INCLUDE_DIRS})
+  target_compile_options(spacetaxi PRIVATE ${SDL_STATIC_CFLAGS_OTHER})
+  target_link_libraries(spacetaxi PRIVATE ${SDL_STATIC_LDFLAGS})
+  # VitaSDK's SDL2 is built with vitaGL, whose libvitashark calls into SceShaccCgExt
+  # (which needs taiHEN); SDL2's pkg-config file doesn't list them, so add them after
+  # the SDL libraries (static link order matters).
+  find_library(SHACCCGEXT_LIB SceShaccCgExt)
+  if(NOT SHACCCGEXT_LIB)
+    message(FATAL_ERROR "libSceShaccCgExt not found in VitaSDK - install it with:  vdpm SceShaccCgExt")
+  endif()
+  target_link_libraries(spacetaxi PRIVATE SceShaccCgExt taihen_stub SceShaccCg_stub)
+
+  # VPK version is ##.## : 1.1.0 -> "01.10"
+  math(EXPR _vmin "${PROJECT_VERSION_MINOR} * 10 + ${PROJECT_VERSION_PATCH}")
+  set(_vmaj "${PROJECT_VERSION_MAJOR}")
+  if(_vmaj LESS 10)
+    set(_vmaj "0${_vmaj}")
+  endif()
+  if(_vmin LESS 10)
+    set(_vmin "0${_vmin}")
+  endif()
+  set(VITA_APP_VERSION "${_vmaj}.${_vmin}")
+  set(VITA_TITLEID "STXM00001")   # 4 letters + 5 digits, unique per homebrew
+
+  # Files packed into the .vpk: LiveArea graphics (8-bit indexed PNGs) and the game
+  # assets, which the game reads from app0:/assets/ (see main.cpp).
+  set(VPK_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/vita/sce_sys/icon0.png" sce_sys/icon0.png
+    "${CMAKE_CURRENT_SOURCE_DIR}/vita/sce_sys/livearea/contents/bg.png" sce_sys/livearea/contents/bg.png
+    "${CMAKE_CURRENT_SOURCE_DIR}/vita/sce_sys/livearea/contents/startup.png" sce_sys/livearea/contents/startup.png
+    "${CMAKE_CURRENT_SOURCE_DIR}/vita/sce_sys/livearea/contents/template.xml" sce_sys/livearea/contents/template.xml)
+  file(GLOB_RECURSE VITA_ASSETS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+       CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/*")
+  foreach(f IN LISTS VITA_ASSETS)
+    list(APPEND VPK_FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/${f}" "assets/${f}")
+  endforeach()
+
+  vita_create_self(eboot.bin spacetaxi)
+  vita_create_vpk(SpaceTaxiMayhem.vpk ${VITA_TITLEID} eboot.bin
+    VERSION ${VITA_APP_VERSION}
+    NAME "Space Taxi Mayhem"
+    FILE ${VPK_FILES})
+  # -> ${CMAKE_BINARY_DIR}/SpaceTaxiMayhem.vpk
 
 else()
   # ---------------------------------------------------------------- Desktop

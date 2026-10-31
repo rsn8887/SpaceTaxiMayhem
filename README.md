@@ -18,6 +18,31 @@ cmake -S ./spacetaxi -B build-switch -DPLATFORM=SWITCH
 cmake --build build-switch -j
 ```
 
+- PS Vita (needs custom firmware, e.g. HENkaku/Ensō; VITASDK must be set):
+```
+docker run --rm -it -v "$PWD:/workspace" vitasdk/vitasdk:2026.08
+cd /workspace
+cmake -S ./spacetaxi -B build-vita -DPLATFORM=VITA
+cmake --build build-vita -j
+```
+This creates `build-vita/SpaceTaxiMayhem.vpk`, which you install with VitaShell. If SDL2 or SDL2_ttf are missing from VitaSDK, run `vdpm sdl2 sdl2_ttf`.
+
+- Linux x64 (Docker, also works on an Apple Silicon Mac):
+```
+docker build --platform linux/amd64 -t spacetaxi-linux-x64 ./spacetaxi/docker/linux-x64
+docker run --rm --platform linux/amd64 -v "$(pwd)":/app -w /app spacetaxi-linux-x64 \
+  sh -c "cmake -S ./spacetaxi -B build-linux && cmake --build build-linux -j"
+```
+This creates `build-linux/spacetaxi` with its `assets` folder next to it. To run it, the target system needs SDL2 and SDL2_ttf installed (e.g. `sudo apt install libsdl2-2.0-0 libsdl2-ttf-2.0-0`).
+
+- Linux ARM64 (e.g. Raspberry Pi 4/5 with 64-bit Raspberry Pi OS; Docker, runs natively on an Apple Silicon Mac):
+```
+docker build --platform linux/arm64 -t spacetaxi-linux-arm64 ./spacetaxi/docker/linux-arm64
+docker run --rm --platform linux/arm64 -v "$(pwd)":/app -w /app spacetaxi-linux-arm64 \
+  sh -c "cmake -S ./spacetaxi -B build-linux-arm64 && cmake --build build-linux-arm64 -j"
+```
+This creates `build-linux-arm64/spacetaxi` with its `assets` folder next to it. On the Pi, install SDL2 and SDL2_ttf with `sudo apt install libsdl2-2.0-0 libsdl2-ttf-2.0-0`.
+
 - MacOS:
 ```
 brew install cmake sdl2 sdl2_ttf
