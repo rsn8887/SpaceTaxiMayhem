@@ -734,13 +734,7 @@ static void buildLevel(int idx) {
         L.tpA = {tpAx0 * 8, tpAy0 * 8, (tpAx1 - tpAx0 + 1) * 8, (tpAy1 - tpAy0 + 1) * 8};
         L.tpB = {tpBx0 * 8, tpBy0 * 8, (tpBx1 - tpBx0 + 1) * 8, (tpBy1 - tpBy0 + 1) * 8};
     }
-    // switches: static base + button are solid (button colour is drawn dynamically)
-    for (auto& s : L.switches)
-        for (int py = 4; py < 8; py++)
-            for (int px = 0; px < 8; px++) {
-                if (py < 6 && (px < 2 || px > 5)) continue;
-                putS(s.x + px, s.y + py, py >= 6 ? (py == 6 ? rgb(170, 170, 184) : rgb(70, 70, 84)) : rgb(0, 0, 0), true);
-            }
+    // switches are pressure plates on the floor: not solid, drawn dynamically (see drawWorld)
     // static pads
     for (int y = 0; y < MH; y++) {
         int x = 0;
@@ -1047,6 +1041,13 @@ static void deliver(int pi) {
     addText(p.cx(), p.y - 6, "$" + std::to_string(pay), PCOL[pi].light);
 }
 
+// A floor switch is pressed by a taxi resting on the floor right under it with its gear
+// over the plate (the switch tile sits directly on the floor).
+static bool switchPressedBy(const Player& p, SDL_Point s) {
+    int bottom = (int)std::lround(p.y) + 10;
+    return p.landed && bottom == s.y + 8 && p.x + 14 >= s.x + 1 && p.x + 1 <= s.x + 6;
+}
+
 static int padReminderCount = 0;   // checked by the self-test
 static void onLanded(int i) {
     Player& p = P[i];
@@ -1062,7 +1063,7 @@ static void onLanded(int i) {
     }
     // floor switches
     for (auto& s : LV.switches) {
-        if (p.x + 15 >= s.x && p.x <= s.x + 7 && bottom >= s.y + 3 && bottom <= s.y + 6 && LV.switchCd <= 0) {
+        if (switchPressedBy(p, s) && LV.switchCd <= 0) {
             LV.switchOn = !LV.switchOn; LV.switchCd = 0.6f;
             audio.play(SFX_SWITCH, 0.8f, panOf(p.cx()));
             audio.play(SFX_DOOR, 0.6f, 0);
@@ -1736,11 +1737,18 @@ static void drawWorld() {
                 }
             }
         }
-    // switch buttons
+    // floor switches: a coloured button on a flat plate. The colour shows which doors are
+    // closed (red = red doors, cyan = cyan doors); it is pushed flat while a taxi sits on it.
     for (auto& s : L.switches) {
         uint32_t col = L.switchOn ? rgb(60, 200, 255) : rgb(255, 60, 60);
-        for (int py = 4; py < 6; py++) for (int px = 2; px < 6; px++) pset(s.x + px, s.y + py + MAPY, py == 4 ? mix(col, rgb(255, 255, 255), 0.5f) : col);
-        if ((int)(L.time * 2) & 1) pblend(s.x + 3, s.y + 2 + MAPY, col, 0.5f);
+        bool pressed = false;
+        for (auto& p : P) if (p.joined && p.alive && switchPressedBy(p, s)) pressed = true;
+        int sy = s.y + MAPY;
+        for (int px = 0; px < 8; px++) { pset(s.x + px, sy + 6, rgb(170, 170, 184)); pset(s.x + px, sy + 7, rgb(70, 70, 84)); }
+        int top = pressed ? 5 : 3;
+        for (int py = top; py < 6; py++)
+            for (int px = 2; px < 6; px++) pset(s.x + px, sy + py, py == top ? mix(col, rgb(255, 255, 255), 0.5f) : col);
+        if (!pressed && ((int)(L.time * 2) & 1)) { pblend(s.x + 3, sy + 1, col, 0.6f); pblend(s.x + 4, sy + 1, col, 0.6f); }
     }
     // moving platforms
     for (auto& p : L.plats) {
@@ -2079,7 +2087,7 @@ static bool botFree(int tx, int ty) {
         for (int x = tx - 1; x < tx + 3; x++) {
             if (y < 0) { if (x < 0 || x >= MW) return false; continue; }
             char c = LV.T(x, y);
-            if (isWall(c) || isPadC(c) || c == '=' || c == 'X' || c == 'S' || doorSolid(c, LV)) return false;
+            if (isWall(c) || isPadC(c) || c == '=' || c == 'X' || doorSolid(c, LV)) return false;
             if (c == 'G' && LV.gateAnim < 1.f) return false;
         }
     return true;
@@ -2774,6 +2782,32 @@ static int runSelfTest() {
         bool single = P[0].lives == 0;
         printf("life stealing: %s %s, single player not affected %s\n", trace.c_str(), multi ? "ok" : "FAIL", single ? "ok" : "FAIL");
         if (!(multi && single)) fails++;
+    }
+    // 18) floor switches: landing on one toggles the doors without crashing
+    {
+        int good = 0, tries = 0;
+        for (int L = 0; L < NLEVELS; L++) {
+            if (LEVELDEFS[L].map.empty()) continue;
+            for (int k = 0; k < MAXP; k++) P[k] = Player();
+            P[0].joined = true; P[0].lives = 99;
+            startLevel(L); gstate = GS_PLAY;
+            for (auto& q : PASS) q = Passenger();
+            spawnT = 999;
+            for (size_t si = 0; si < LV.switches.size(); si++) {
+                SDL_Point sw = LV.switches[si];
+                bool before = LV.switchOn;
+                LV.switchCd = 0;
+                Player& p = P[0];
+                p = Player(); p.joined = true; p.alive = true; p.lives = 99; p.face = 0; p.gear = true; p.gearExt = 2; p.fuel = 50; p.airT = 9;
+                p.x = sw.x - 4.f; p.y = sw.y + 8 - 10 - 6.f; p.vx = 0; p.vy = 15; p.cur = p.prev = Input();
+                for (int t = 0; t < 120 && p.alive && !p.landed; t++) { rebuildMasks(); updateTaxi(0, 1 / 60.f); }
+                bool ok = p.alive && p.landed && LV.switchOn != before;
+                tries++; if (ok) good++;
+                if (getenv("SWDBG")) printf("  L%d switch %zu at %d,%d: alive=%d landed=%d toggled=%d\n", L + 1, si, sw.x, sw.y, p.alive, p.landed, LV.switchOn != before);
+            }
+        }
+        printf("floor switches: %d of %d switches toggled by a centred, gentle landing\n", good, tries);
+        if (good != tries) fails++;
     }
     printf(fails ? "SELFTEST FAILED (%d)\n" : "SELFTEST PASSED\n", fails);
     return fails ? 1 : 0;

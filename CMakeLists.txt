@@ -27,7 +27,7 @@ if(PLATFORM_UC STREQUAL "SWITCH" AND NOT CMAKE_TOOLCHAIN_FILE)
   set(CMAKE_TOOLCHAIN_FILE "$ENV{DEVKITPRO}/cmake/Switch.cmake" CACHE FILEPATH "devkitPro Switch toolchain")
 endif()
 
-project(SpaceTaxiMayhem VERSION 1.0.0 LANGUAGES C CXX)
+project(SpaceTaxiMayhem VERSION 1.1.0 LANGUAGES C CXX)
 
 # Also recognise a Switch build configured via the toolchain file alone
 if(NINTENDO_SWITCH)
