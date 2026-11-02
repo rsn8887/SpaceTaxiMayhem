@@ -35,7 +35,7 @@ static const float THRUST_UP = 100.f;
 static const float THRUST_DOWN = 45.f;
 static const float THRUST_SIDE = 72.f;
 static const float LAND_VY = 46.f;     // max vertical speed for a safe landing
-static const float LAND_VX = 30.f;
+static const float LAND_VX = 12.f;     // max sideways speed (relative to the pad/platform) for a safe landing
 static const float MAXVX = 115.f, MAXVY = 150.f;
 static const float FUEL_MAX = 100.f;
 
@@ -339,6 +339,33 @@ static const char* PBODY[2][5][10] = {
         {"....S.", "....C.", ".....C", "CCCCC.", "CCCC..", "SDDD..", "DDDDD.", ".L.L..", ".L.L..", ".B.B.."},
     },
 };
+enum { AGE_ADULT, AGE_KID, AGE_OLD };
+// kids: the same heads (drawn 2 rows lower) on a shorter body (the adult body minus one torso row)
+static const char* KBODY[2][5][10] = {
+    {   // boy
+        {"......", "......", "......", "......", "......", "CCCCC.", "SCCCS.", ".PPP..", ".P.P..", ".B.B.."},
+        {"......", "......", "......", "......", "......", ".CCC..", ".CCS..", ".PPP..", "P...P.", "B...B."},
+        {"......", "......", "......", "......", "......", ".CCC..", "SCC...", ".PPP..", "..P...", "..BB.."},
+        {"......", "......", ".....S", ".....C", ".....C", "CCCCC.", "SCCC..", ".PPP..", ".P.P..", ".B.B.."},
+        {"......", "......", "......", ".....S", ".....C", "CCCCC.", "SCCC..", ".PPP..", ".P.P..", ".B.B.."},
+    },
+    {   // girl
+        {"......", "......", "......", "......", "......", "CCCCC.", "SDDDS.", "DDDDD.", ".L.L..", ".B.B.."},
+        {"......", "......", "......", "......", "......", ".CCC..", ".DDS..", "DDDD..", "L...L.", "B...B."},
+        {"......", "......", "......", "......", "......", ".CCC..", "SDD...", ".DDDD.", "..L...", "..BB.."},
+        {"......", "......", ".....S", ".....C", ".....C", "CCCCC.", "SDDD..", "DDDDD.", ".L.L..", ".B.B.."},
+        {"......", "......", "......", ".....S", ".....C", "CCCCC.", "SDDD..", "DDDDD.", ".L.L..", ".B.B.."},
+    },
+};
+// old people: the adult body plus a walking stick (K) and a hand on it, drawn wherever the body is empty.
+// Standing/walking: stick in front (right, mirrored when walking left); waving: stick in the other hand.
+static const char* OSTICK[5][10] = {
+    {"......", "......", "......", "......", "......", ".....K", ".....K", ".....K", ".....K", ".....K"},
+    {"......", "......", "......", "......", "......", "....SK", ".....K", ".....K", ".....K", ".....K"},
+    {"......", "......", "......", "......", "......", "...S.K", "....K.", "....K.", "....K.", "....K."},
+    {"......", "......", "......", "......", "......", "......", "K.....", "K.....", "K.....", "K....."},
+    {"......", "......", "......", "......", "......", "......", "K.....", "K.....", "K.....", "K....."},
+};
 // hair styles: 0 short, 1 afro, 2 cap, 3 bald (men) | 4 long, 5 bob, 6 ponytail (women)
 static const char* PHEAD[7][2][4] = {   // [style][0 front / 1 side][rows 0-3]
     {{".HHH..", ".ESE..", ".SSS..", "......"}, {".HHH..", ".HSE..", ".SSS..", "......"}},
@@ -433,6 +460,8 @@ struct Passenger {
     float waveT = 0;             // time until the next (silent) wave
     int taxi = -1; float heyT = 0, anim = 0, beamT = 0, beamDur = 0.9f, dir = 1; int voice = 0;
     int gender = 0, style = 0; uint32_t skin = 0, hair = 0, top = 0, bottom = 0;
+    int age = 0;                 // AGE_ADULT, AGE_KID (smaller, quicker, high voice), AGE_OLD (walking stick, slow)
+    float pitch = 1.f;           // this passenger's voice playback rate (fixed for their whole trip)
     bool noTip = false; int fareCut = 0;   // after rough landings with this passenger aboard
 };
 static std::vector<Passenger> PASS(12);
@@ -455,6 +484,10 @@ static float tglobal = 0;
 static std::vector<uint32_t> titleBg;
 
 static float panOf(float x) { return std::clamp((x - WW / 2) / (WW / 2.f), -1.f, 1.f) * 0.8f; }
+// every passenger speaks with their own voice set and pitch
+static void sayQ(const Passenger& q, int clip, float pan) { audio.say(q.voice, clip, pan, false, q.pitch); }
+// walking speed (and walk animation speed) relative to an adult
+static float passSpeed(const Passenger& q) { return q.age == AGE_KID ? 1.35f : q.age == AGE_OLD ? 0.6f : 1.f; }
 
 // ------------------------------------------------------------------ background art
 static void genBackground(const Theme& th, uint32_t* out, int w, int h, int seed) {
@@ -914,7 +947,7 @@ static void killPlayer(int i, const char* why) {
     if (fee > 0) addText(p.cx(), p.y + 6, "-$" + std::to_string(fee), rgb(255, 90, 90));
     if (p.pass >= 0) {
         Passenger& q = PASS[p.pass];
-        audio.say(q.voice, VC_OUCH, panOf(p.cx()));
+        sayQ(q, VC_OUCH, panOf(p.cx()));
         if (q.up) upSpawnT = 2.0f;
         q.state = PS_NONE;
         p.pass = -1;
@@ -972,6 +1005,28 @@ static std::vector<int> numberedPads() {
 }
 static int padByChar(char c) { for (int i = 0; i < (int)LV.pads.size(); i++) if (LV.pads[i].id == c) return i; return -1; }
 
+// Who the passenger is: adult (60%), kid (20%) or old (20%), man or woman / boy or girl.
+// Voice set and pitch follow from that, with a random pitch per passenger that stays fixed.
+static void rollPassengerLook(Passenger& q) {
+    float r = rng.f();
+    q.age = r < 0.2f ? AGE_KID : r < 0.4f ? AGE_OLD : AGE_ADULT;
+    q.gender = rng.i(2);
+    static const int OLD_MEN_STYLES[3] = {0, 2, 3};      // short, cap, bald
+    if (q.age == AGE_OLD) q.style = q.gender ? 4 + rng.i(2) : OLD_MEN_STYLES[rng.i(3)];
+    else if (q.age == AGE_KID) q.style = q.gender ? 4 + rng.i(3) : rng.i(3);
+    else q.style = q.gender ? 4 + rng.i(3) : rng.i(4);
+    q.skin = SKIN_TONES[rng.i(6)];
+    q.hair = q.age == AGE_OLD ? (rng.f() < 0.5f ? HAIR_COLS[5] : rgb(240, 240, 236)) : HAIR_COLS[rng.i(7)];
+    q.top = TOP_COLS[rng.i(10)];
+    q.bottom = q.gender ? SKIRT_COLS[rng.i(6)] : PANTS_COLS[rng.i(5)];
+    if (q.age == AGE_KID)      { q.voice = q.gender ? VS_GIRL : VS_BOY;           q.pitch = 0.95f + rng.f() * 0.2f; }
+    else if (q.age == AGE_OLD) { q.voice = q.gender ? VS_OLDWOMAN : VS_OLDMAN;    q.pitch = 0.9f + rng.f() * 0.12f; }
+    else {
+        q.voice = q.gender ? (rng.i(2) ? VS_WOMAN1 : VS_WOMAN2) : (rng.i(2) ? VS_MAN1 : VS_MAN2);
+        q.pitch = 0.88f + rng.f() * 0.24f;
+    }
+}
+
 static void spawnPassenger(bool up) {
     std::vector<int> np = numberedPads();
     std::vector<int> cand;
@@ -1007,13 +1062,7 @@ static void spawnPassenger(bool up) {
     q.relx = rng.f() < 0.5f ? 0.f : (float)(pad.w - 6);    // at the very end of the pad
     q.homeX = q.relx;
     q.state = PS_WAIT; q.heyT = 0.2f; q.anim = 0; q.waveT = 5.f + rng.f() * 4.f;
-    q.gender = rng.i(2);
-    q.style = q.gender ? 4 + rng.i(3) : rng.i(4);
-    q.skin = SKIN_TONES[rng.i(6)];
-    q.hair = HAIR_COLS[rng.i(7)];
-    q.top = TOP_COLS[rng.i(10)];
-    q.bottom = q.gender ? SKIRT_COLS[rng.i(6)] : PANTS_COLS[rng.i(5)];
-    q.voice = q.gender ? 1 : (rng.f() < 0.5f ? 0 : 2);   // voice 1 is the female voice
+    rollPassengerLook(q);
     q.dir = q.relx < pad.w / 2 ? 1.f : -1.f;
 }
 
@@ -1047,7 +1096,7 @@ static void deliver(int pi) {
     q.exitX = (q.relx - lo < hi - q.relx) ? lo : hi;          // nearest edge of the pad
     q.dir = q.exitX > q.relx ? 1.f : -1.f;
     p.pass = -1;
-    audio.say(q.voice, VC_THANKS, panOf(p.cx()));
+    sayQ(q, VC_THANKS, panOf(p.cx()));
     audio.play(SFX_TIP, 0.8f, panOf(p.cx()));
     addText(p.cx(), p.y - 6, "$" + std::to_string(pay), PCOL[pi].light);
 }
@@ -1089,7 +1138,7 @@ static void onLanded(int i) {
         if (!q.up && id == q.dest) deliver(i);
         else if (!q.up && id != 'F') {
             // wrong pad: the passenger reminds the driver where they want to go
-            audio.say(q.voice, VC_PAD1 + (q.dest - '1'), panOf(p.cx()));
+            sayQ(q, VC_PAD1 + (q.dest - '1'), panOf(p.cx()));
             addText(p.cx(), p.y - 6, std::string("PAD ") + q.dest, PCOL[i].light);
             padReminderCount++;
         }
@@ -1217,6 +1266,8 @@ static void updateTaxi(int i, float dt) {
             for (auto& pl : LV.plats)
                 if (pl.y >= iy + 6 && pl.y <= iy + 12 && ix + 14 >= pl.x && ix + 2 <= pl.x + pl.w) { svx = pl.vx; svy = pl.vy; }
             float rvx = p.vx - svx, rvy = p.vy - svy;
+            // sliding in sideways faster than the pad moves is a crash, even at a gentle sink rate
+            if (rvy > -14 && rvy <= LAND_VY && std::fabs(rvx) > LAND_VX) { killPlayer(i, "SIDEWAYS CRASH!"); return; }
             if (rvy > -14 && rvy <= LAND_VY && std::fabs(rvx) <= LAND_VX) {
                 // touching down locks the gear fully out; lift the taxi so it rests on it
                 p.gearExt = 2;
@@ -1309,14 +1360,14 @@ static void updatePassengers(float dt) {
                 Player& p = P[best];
                 float dx = p.cx() - px;
                 q.dir = dx > 0 ? 1.f : -1.f;
-                float step = 14.f * dt;
+                float step = 14.f * passSpeed(q) * dt;
                 if (std::fabs(dx) <= step + 1.f) {
                     // board
                     q.state = PS_RIDE; q.taxi = best; p.pass = k; p.tip = TIP_START;
                     audio.play(SFX_PICKUP, 0.7f, panOf(p.cx()));
-                    if (q.up) { audio.say(q.voice, VC_UP, panOf(p.cx())); addText(p.cx(), p.y - 6, "UP!", PCOL[best].light); }
+                    if (q.up) { sayQ(q, VC_UP, panOf(p.cx())); addText(p.cx(), p.y - 6, "UP!", PCOL[best].light); }
                     else {
-                        audio.say(q.voice, VC_PAD1 + (q.dest - '1'), panOf(p.cx()));
+                        sayQ(q, VC_PAD1 + (q.dest - '1'), panOf(p.cx()));
                         addText(p.cx(), p.y - 6, std::string("PAD ") + q.dest, PCOL[best].light);
                     }
                 } else q.relx += q.dir * step;
@@ -1324,14 +1375,14 @@ static void updatePassengers(float dt) {
             } else if (std::fabs(q.homeX - q.relx) > 0.5f) {
                 // the taxi left before they got in: walk back to where they were waiting
                 q.dir = q.homeX > q.relx ? 1.f : -1.f;
-                float step = 14.f * dt;
+                float step = 14.f * passSpeed(q) * dt;
                 q.relx = std::fabs(q.homeX - q.relx) <= step ? q.homeX : q.relx + q.dir * step;
             } else {
                 q.relx = q.homeX;
                 // "Hey, taxi!" exactly once, right after appearing; afterwards just wave now and then
                 if (q.heyT > 0) {
                     q.heyT -= dt;
-                    if (q.heyT <= 0) { audio.say(q.voice, VC_HEY, panOf(px)); q.anim = 0; heyCount++; }
+                    if (q.heyT <= 0) { sayQ(q, VC_HEY, panOf(px)); q.anim = 0; heyCount++; }
                 }
                 q.waveT -= dt;
                 if (q.waveT <= 0) { q.anim = 0; q.waveT = 6.f + rng.f() * 4.f; }
@@ -1341,7 +1392,7 @@ static void updatePassengers(float dt) {
             if (p.pass == k) p.tip = std::max(0.f, p.tip - TIP_DECAY * dt);
         } else if (q.state == PS_EXIT) {
             // walk (slowly) to the edge of the pad, never beyond it
-            float step = 12.f * dt;
+            float step = 12.f * passSpeed(q) * dt;
             if (std::fabs(q.exitX - q.relx) <= step) {
                 q.relx = q.exitX; q.state = PS_BEAM; q.beamT = q.beamDur = 0.9f; q.anim = 0;
                 const PadE& pd = LV.pads[q.pad];
@@ -1540,12 +1591,12 @@ static void blitTaxi(int i, int sx, int sy) {
 }
 
 static int passFrame(const Passenger& q) {
-    if (q.state == PS_EXIT) return 1 + ((int)(q.anim * 6) & 1);
+    if (q.state == PS_EXIT) return 1 + ((int)(q.anim * 6 * passSpeed(q)) & 1);
     if (q.state == PS_BEAM) return 0;
     bool walking = false;
     for (int i = 0; i < MAXP; i++)
         if (P[i].joined && P[i].alive && P[i].landed && P[i].landPad == q.pad && P[i].pass < 0) walking = true;
-    if (walking || std::fabs(q.homeX - q.relx) > 0.5f) return 1 + ((int)(q.anim * 6) & 1);
+    if (walking || std::fabs(q.homeX - q.relx) > 0.5f) return 1 + ((int)(q.anim * 6 * passSpeed(q)) & 1);
     if (q.anim < 2.0f) return 3 + ((int)(q.anim * 6) & 1);
     return 0;
 }
@@ -1553,15 +1604,49 @@ static int passFrame(const Passenger& q) {
 static char passGlyph(const Passenger& q, int frame, int x, int y) {
     bool side = frame == 1 || frame == 2;
     int sx = (side && q.dir < 0) ? 5 - x : x;
+    if (q.age == AGE_KID) {   // head 2 rows lower on a short body
+        int hy = y - 2;
+        if (hy >= 0 && hy < 4) { char h = PHEAD[q.style][side ? 1 : 0][hy][sx]; if (h != '.') return h; }
+        return KBODY[q.gender][frame][y][sx];
+    }
     if (y < 4) { char h = PHEAD[q.style][side ? 1 : 0][y][sx]; if (h != '.') return h; }
-    return PBODY[q.gender][frame][y][sx];
+    char c = PBODY[q.gender][frame][y][sx];
+    if (q.age == AGE_OLD && c == '.') c = OSTICK[frame][y][sx];
+    return c;
 }
 static uint32_t passColor(const Passenger& q, char c) {
     switch (c) {
         case 'H': return q.hair;  case 'S': case 'L': return q.skin;  case 'E': return rgb(24, 16, 16);
         case 'C': return q.top;   case 'P': case 'D': return q.bottom; case 'B': return rgb(30, 24, 20);
+        case 'K': return rgb(120, 78, 40);   // walking stick
         default: return 0;
     }
+}
+// Bevel shading like the rest of the art: light from the top left. Each pixel is compared with
+// its neighbours; edges of a colour region (hair, skin, top, trousers, ...) facing up/left get
+// lighter, edges facing down/right get a darker, slightly purple shadow. Only colours change,
+// so the drawn shape (and the collision mask) stays exactly the glyph shape.
+static int passRegion(char c) {
+    switch (c) {
+        case 'H': return 1; case 'S': case 'L': return 2; case 'C': return 3;
+        case 'P': case 'D': return 4; case 'B': return 5; case 'K': return 6; case 'E': return 7;
+        default: return 0;
+    }
+}
+static uint32_t passShaded(const Passenger& q, int frame, int x, int y) {
+    char c = passGlyph(q, frame, x, y);
+    uint32_t col = passColor(q, c);
+    if (c == 'E') return col;
+    auto other = [&](int dx, int dy) {
+        int nx = x + dx, ny = y + dy;
+        if (nx < 0 || nx >= 6 || ny < 0 || ny >= 10) return true;
+        int r = passRegion(passGlyph(q, frame, nx, ny));
+        return r != passRegion(c) && r != 7;   // eyes don't count as an edge of the face
+    };
+    int s = (other(0, -1) ? 2 : 0) + (other(-1, 0) ? 1 : 0) - (other(0, 1) ? 2 : 0) - (other(1, 0) ? 1 : 0);
+    if (s > 0) return mix(col, rgb(255, 250, 228), 0.17f * s);
+    if (s < 0) return mix(col, rgb(36, 16, 56), 0.19f * -s);
+    return col;
 }
 static void drawPassenger(const Passenger& q, int sx, int sy) {
     int frame = passFrame(q);
@@ -1585,10 +1670,11 @@ static void drawPassenger(const Passenger& q, int sx, int sy) {
         for (int x = 0; x < 6; x++) {
             char c = passGlyph(q, frame, x, y);
             if (c == '.') continue;
+            uint32_t col = passShaded(q, frame, x, y);
             if (q.state == PS_BEAM) {
                 if (bayer(x, y + (int)(tglobal * 20)) > vis) continue;
-                pset(sx + x, sy + y, mix(passColor(q, c), rgb(200, 250, 255), 1 - vis));
-            } else pset(sx + x, sy + y, passColor(q, c));
+                pset(sx + x, sy + y, mix(col, rgb(200, 250, 255), 1 - vis));
+            } else pset(sx + x, sy + y, col);
         }
     if (q.up && q.state == PS_WAIT && ((int)(tglobal * 3) & 1)) drawTinyOutlinedC(sx + 3, sy - 7, "UP", rgb(120, 255, 120));
 }
@@ -1620,7 +1706,7 @@ static void passengerCollisions() {
                     if (u >= 0 && u < 16 && v >= 0 && v < 10 && m[v * 16 + u]) { hit = true; break; }
                 }
             if (!hit) continue;
-            audio.say(q.voice, VC_OUCH, panOf(qx + 3));     // "Ouch!" plays right away
+            sayQ(q, VC_OUCH, panOf(qx + 3));     // "Ouch!" plays right away
             audio.play(SFX_BUMP, 0.8f, panOf(qx + 3));
             if (getenv("BOTDBG")) printf("  PASSENGER HIT by p%d at %d,%d t=%.1f\n", i, qx, qy, LV.time);
             int fine = (int)std::min<long>(PASSENGER_HIT_PENALTY, p.score);
@@ -2487,13 +2573,13 @@ static int runSelfTest() {
     }
     printf("gate: %d pixels where mask and drawn doors disagree (over 4 opening stages)\n", gateBad);
     if (gateBad) fails++;
-    // 5) passenger collision shape == drawn pixels (every gender, hair style, pose, facing)
+    // 5) passenger collision shape == drawn pixels (every age, gender, hair style, pose, facing)
     {
         for (int k = 0; k < MAXP; k++) P[k].landed = false;
         const uint32_t KEY = 0xFF123456u;
         int bad = 0, cases = 0;
-        for (int g = 0; g < 2; g++) for (int st = 0; st < 7; st++) for (int pose = 0; pose < 3; pose++) for (int d = 0; d < 2; d++) for (int ph = 0; ph < 2; ph++) {
-            Passenger q; q.gender = g; q.style = st; q.dir = d ? 1.f : -1.f; q.skin = SKIN_TONES[0]; q.hair = HAIR_COLS[3];
+        for (int age = 0; age < 3; age++) for (int g = 0; g < 2; g++) for (int st = 0; st < 7; st++) for (int pose = 0; pose < 3; pose++) for (int d = 0; d < 2; d++) for (int ph = 0; ph < 2; ph++) {
+            Passenger q; q.age = age; q.gender = g; q.style = st; q.dir = d ? 1.f : -1.f; q.skin = SKIN_TONES[0]; q.hair = HAIR_COLS[3];
             q.top = TOP_COLS[0]; q.bottom = PANTS_COLS[0]; q.pad = 0;
             if (pose == 0) { q.state = PS_WAIT; q.anim = 3.f; }                 // standing
             else if (pose == 1) { q.state = PS_WAIT; q.anim = ph ? 0.2f : 0.f; } // waving
@@ -2507,6 +2593,24 @@ static int runSelfTest() {
         }
         printf("passenger masks: %d sprite variants checked, %d mismatching pixels\n", cases, bad);
         if (bad) fails++;
+    }
+    // 5b) passenger types: voice set matches age and gender, pitch in range, walking speeds
+    {
+        int bad = 0, n[3] = {0, 0, 0};
+        for (int k = 0; k < 2000; k++) {
+            Passenger q; rollPassengerLook(q); n[q.age]++;
+            int want = q.age == AGE_KID ? (q.gender ? VS_GIRL : VS_BOY) : q.age == AGE_OLD ? (q.gender ? VS_OLDWOMAN : VS_OLDMAN) : -1;
+            if (want >= 0 && q.voice != want) bad++;
+            if (q.age == AGE_ADULT && (q.gender ? (q.voice != VS_WOMAN1 && q.voice != VS_WOMAN2) : (q.voice != VS_MAN1 && q.voice != VS_MAN2))) bad++;
+            if (q.pitch < 0.85f || q.pitch > 1.2f) bad++;
+            if (q.gender && q.style < 4) bad++;
+            if (!q.gender && q.style >= 4) bad++;
+        }
+        Passenger kid, old, adult; kid.age = AGE_KID; old.age = AGE_OLD;
+        bool speeds = passSpeed(kid) > passSpeed(adult) && passSpeed(old) < passSpeed(adult);
+        printf("passenger types: %d adults, %d kids, %d old; voice/pitch/style mismatches %d; kids faster, old slower: %s\n",
+               n[0], n[1], n[2], bad, speeds ? "yes" : "NO");
+        if (bad || !speeds || !n[0] || !n[1] || !n[2]) fails++;
     }
     // 6) taxi vs standing passenger: every overlapping placement, truth from rendered pixels
     {
@@ -2687,6 +2791,49 @@ static int runSelfTest() {
                ok + bad, landedN, crashedN, bad);
         if (bad) fails++;
     }
+    // 13b) sideways speed at touchdown: safe up to LAND_VX relative to the pad, a crash above it,
+    //      on a fixed pad and on a moving platform (where matching its speed is what counts)
+    {
+        int bad = 0, cases = 0;
+        auto touchdown = [&](int L, int plat, int padk, float relVx) -> bool {
+            for (int k = 0; k < MAXP; k++) P[k] = Player();
+            P[0].joined = true; P[0].lives = 99;
+            startLevel(L); gstate = GS_PLAY;
+            for (auto& q : PASS) q = Passenger();
+            spawnT = 999;
+            if (plat >= 0) updateWorld(LV.plats[plat].d.period * 0.22f);   // platform near full speed (taxi not in play yet)
+            Player& p = P[0];
+            p = Player(); p.joined = true; p.alive = true; p.lives = 99; p.face = 0; p.gear = true; p.gearExt = 2;
+            p.airT = 9; p.fuel = 50; p.cur = p.prev = Input();
+            if (plat >= 0) { const PlatE& pl = LV.plats[plat]; p.x = pl.x + pl.w / 2.f - 8; p.y = pl.y - 16.f; }
+            else { const PadE& pd = LV.pads[padk]; p.x = pd.x + pd.w / 2.f - 8; p.y = pd.y - 16.f; }
+            for (int t = 0; t < 120 && p.alive && !p.landed; t++) {
+                float svx = plat >= 0 ? LV.plats[plat].vx : 0, svy = plat >= 0 ? LV.plats[plat].vy : 0;
+                p.vx = svx + relVx; p.vy = svy + 15;     // hold the approach: sinking gently, drifting relVx sideways
+                if (plat >= 0) updateWorld(1 / 60.f);
+                rebuildMasks(); updateTaxi(0, 1 / 60.f);
+            }
+            if (getenv("SIDEDBG")) printf("  L%d plat %d platform vx %.1f, taxi rel %.1f -> landed %d\n", L, plat, plat >= 0 ? LV.plats[plat].vx : 0.f, relVx, p.landed);
+            return p.alive && p.landed;
+        };
+        // fixed pad (level 1, pad 1)
+        for (float v : {0.f, 6.f, -10.f, 11.5f, -11.5f}) { cases++; if (!touchdown(0, -1, padByChar('1'), v)) bad++; }
+        for (float v : {13.f, -13.f, 20.f, -30.f}) { cases++; if (touchdown(0, -1, padByChar('1'), v)) bad++; }
+        // a horizontally moving platform with a pad on it, wherever the levels have one
+        int movL = -1, movP = -1;
+        for (int L = 0; L < NLEVELS && movL < 0; L++) {
+            startLevel(L);
+            for (int k = 0; k < (int)LV.plats.size(); k++)
+                if (LV.plats[k].pad >= 0 && std::fabs(LV.plats[k].d.x1 - LV.plats[k].d.x0) > 1 && LV.plats[k].w >= 24) { movL = L; movP = k; break; }
+        }
+        if (movL >= 0) {
+            for (float v : {0.f, 8.f, -8.f}) { cases++; if (!touchdown(movL, movP, -1, v)) bad++; }
+            for (float v : {14.f, -14.f}) { cases++; if (touchdown(movL, movP, -1, v)) bad++; }
+        }
+        printf("sideways landing: %d touchdowns (fixed pad%s), limit %.0f px/s relative to the pad, %d wrong\n",
+               cases, movL >= 0 ? " + moving platform" : "", LAND_VX, bad);
+        if (bad) fails++;
+    }
     // 14) rough landings: shake; with a passenger aboard no tip and $5 off the fare, never below 0
     {
         auto run = [&](float vy, bool withPass, char padc, int presetCut) -> std::pair<bool, long> {
@@ -2828,7 +2975,7 @@ static int runSelfTest() {
 
 int main(int argc, char** argv) {
     // debug / test modes
-    int shotLevel = -1, shotFrames = 240, shotPlayers = 5; const char* shotPath = nullptr; bool titleShot = false, iconShot = false, selfTest = false, sceneShot = false, dmgShot = false, liveShot = false;
+    int shotLevel = -1, shotFrames = 240, shotPlayers = 5; const char* shotPath = nullptr; bool passShot = false, titleShot = false, iconShot = false, selfTest = false, sceneShot = false, dmgShot = false, liveShot = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--shot") && i + 2 < argc) { shotLevel = atoi(argv[i + 1]) - 1; shotPath = argv[i + 2]; i += 2; headless = true; }
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) shotFrames = atoi(argv[++i]);
@@ -2840,6 +2987,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--dmg-shot") && i + 1 < argc) { dmgShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--livearea-shot") && i + 1 < argc) { liveShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--title-shot") && i + 1 < argc) { titleShot = true; shotPath = argv[++i]; headless = true; }
+        else if (!strcmp(argv[i], "--passengers-shot") && i + 1 < argc) { passShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--icon-shot") && i + 1 < argc) { iconShot = true; shotPath = argv[++i]; headless = true; }
     }
 #ifdef __SWITCH__
@@ -2942,6 +3090,25 @@ int main(int argc, char** argv) {
                 }
             for (int k = 0; k < 4; k++) { put(15 + (k & 1) * 4, 31 + k * 2, mix(icon[(31 + k * 2) * N + 15], rgb(255, 140, 40), 0.6f - k * 0.12f)); }
             for (int y = 0; y < N; y++) for (int x = 0; x < N; x++) fb[y * SW + x] = icon[y * N + x];
+            saveShot(shotPath); return 0;
+        }
+        if (passShot) {
+            // lineup of every passenger type: rows = adult/kid/old, men then women, all poses
+            for (auto& px : fb) px = rgb(40, 44, 70);
+            for (int x = 0; x < SW; x++) for (int r = 0; r < 3; r++) fb[(30 + r * 30 + 10) * SW + x] = rgb(110, 110, 130);
+            for (int age = 0; age < 3; age++) for (int g = 0; g < 2; g++) for (int k = 0; k < 7; k++) {
+                Passenger q; q.age = age; q.gender = g; q.pad = 0;
+                q.style = g ? 4 + k % (age == AGE_OLD ? 2 : 3) : (age == AGE_OLD ? (int[]){0, 2, 3}[k % 3] : k % (age == AGE_KID ? 3 : 4));
+                q.skin = SKIN_TONES[(k + g) % 6]; q.top = TOP_COLS[(k * 3 + g) % 10];
+                q.hair = age == AGE_OLD ? (k & 1 ? HAIR_COLS[5] : rgb(240, 240, 236)) : HAIR_COLS[(k + 2 * g) % 7];
+                q.bottom = g ? SKIRT_COLS[k % 6] : PANTS_COLS[k % 5];
+                int pose = k % 4;   // stand, wave, walk right, walk left
+                q.dir = pose == 3 ? -1.f : 1.f;
+                if (pose == 0) { q.state = PS_WAIT; q.anim = 3.f; }
+                else if (pose == 1) { q.state = PS_WAIT; q.anim = 0.f; }
+                else { q.state = PS_EXIT; q.anim = 0.1f * k; }
+                drawPassenger(q, 10 + (g * 7 + k) * 21, 30 + age * 30);
+            }
             saveShot(shotPath); return 0;
         }
         if (titleShot) {

@@ -17,6 +17,9 @@ enum Sfx {
 };
 
 enum VoiceClip { VC_HEY, VC_UP, VC_THANKS, VC_OUCH, VC_PAD1, VC_COUNT = VC_PAD1 + 9 };
+// Voice sets in assets/voice/v<set>_*.wav (made by tools/make_voices.py):
+// 0/1 men, 2/3 women, 4 boy, 5 girl, 6 old man, 7 old woman
+enum VoiceSet { VS_MAN1, VS_MAN2, VS_WOMAN1, VS_WOMAN2, VS_BOY, VS_GIRL, VS_OLDMAN, VS_OLDWOMAN, NVOICES };
 
 struct Sample { std::vector<float> d; };
 
@@ -81,13 +84,14 @@ public:
     void silenceThrust() { for (int i = 0; i < NTHRUST; i++) thrust(i, 0, 0); }
 
     // Passenger voices are queued so they never talk over each other.
-    void say(int voice, int clip, float pan = 0.f, bool droppable = false) {
+    // rate: playback speed of the clip (> 1 = higher and quicker), gives each passenger their own pitch
+    void say(int voice, int clip, float pan = 0.f, bool droppable = false, float rate = 1.f) {
         if (!ok) return;
-        voice = ((voice % 3) + 3) % 3;
+        voice = ((voice % NVOICES) + NVOICES) % NVOICES;
         if (clip < 0 || clip >= VC_COUNT || voices[voice][clip].d.empty()) return;
         SDL_LockAudioDevice(dev);
         if (droppable && (ch[5].active || !vq.empty())) { SDL_UnlockAudioDevice(dev); return; }
-        if (vq.size() < 4) vq.push_back({&voices[voice][clip], pan});
+        if (vq.size() < 4) vq.push_back({&voices[voice][clip], pan, std::clamp(rate, 0.5f, 2.f)});
         if (!ch[5].active) startNextVoice();
         SDL_UnlockAudioDevice(dev);
     }
@@ -100,20 +104,21 @@ public:
     bool ok = false;
 
 private:
-    struct Chan { const Sample* s = nullptr; size_t pos = 0; float vol = 0, target = 0, pan = 0; bool loop = false, active = false; };
-    struct VQ { const Sample* s; float pan; };
+    struct Chan { const Sample* s = nullptr; size_t pos = 0; float vol = 0, target = 0, pan = 0; bool loop = false, active = false;
+                  double fpos = 0; float rate = 1.f; };   // fpos/rate: resampled playback (voice channel)
+    struct VQ { const Sample* s; float pan; float rate; };
     SDL_AudioDeviceID dev = 0;
     Chan ch[NCH];
     Sample sfx[SFX_COUNT];
     Sample thrustLoop;
-    Sample voices[3][VC_COUNT];
+    Sample voices[NVOICES][VC_COUNT];
     std::deque<VQ> vq;
 
     void startNextVoice() {
         if (vq.empty()) return;
         VQ v = vq.front(); vq.pop_front();
         ch[5].s = v.s; ch[5].pos = 0; ch[5].vol = ch[5].target = 1.0f; ch[5].pan = v.pan * 0.5f;
-        ch[5].loop = false; ch[5].active = true;
+        ch[5].loop = false; ch[5].active = true; ch[5].fpos = 0; ch[5].rate = v.rate;
     }
 
     static void cbStatic(void* ud, Uint8* stream, int len) { ((Audio*)ud)->cb((float*)stream, len / (int)sizeof(float) / 2); }
@@ -124,6 +129,17 @@ private:
             if (!h.active || !h.s || h.s->d.empty()) continue;
             const std::vector<float>& d = h.s->d;
             float lg = std::sqrt(0.5f * (1.f - h.pan)), rg = std::sqrt(0.5f * (1.f + h.pan));
+            if (c == 5) {   // voice: linear-interpolated resampling at h.rate
+                for (int i = 0; i < frames; i++) {
+                    size_t k = (size_t)h.fpos;
+                    if (k + 1 >= d.size()) { h.active = false; break; }
+                    float f = (float)(h.fpos - k), v = (d[k] + (d[k + 1] - d[k]) * f) * h.vol;
+                    out[i * 2] += v * lg; out[i * 2 + 1] += v * rg;
+                    h.fpos += h.rate;
+                }
+                if (!h.active) startNextVoice();
+                continue;
+            }
             for (int i = 0; i < frames; i++) {
                 if (c < NTHRUST) h.vol += (h.target - h.vol) * 0.0015f;   // smooth thrust fades
                 if (h.pos >= d.size()) {
@@ -257,7 +273,7 @@ private:
     void loadVoices(const std::string& dir) {
         const char* names[VC_PAD1] = {"hey", "up", "thanks", "ouch"};
         int loaded = 0;
-        for (int v = 0; v < 3; v++)
+        for (int v = 0; v < NVOICES; v++)
             for (int c = 0; c < VC_COUNT; c++) {
                 std::string key = c < VC_PAD1 ? names[c] : ("pad" + std::to_string(c - VC_PAD1 + 1));
                 std::string p = dir + "voice/v" + std::to_string(v) + "_" + key + ".wav";
