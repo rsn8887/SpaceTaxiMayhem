@@ -1,5 +1,6 @@
 // audio.hpp - tiny software mixer + procedural sound effects for Space Taxi Mayhem
 #pragma once
+#include <algorithm>
 #include <SDL.h>
 #include <vector>
 #include <string>
@@ -12,7 +13,7 @@ enum Sfx {
     SFX_GEAR_DOWN, SFX_GEAR_UP, SFX_LAND, SFX_EXPLODE, SFX_PICKUP, SFX_TIP,
     SFX_FUEL, SFX_SWITCH, SFX_DOOR, SFX_TELEPORT, SFX_GATE, SFX_LEVELDONE,
     SFX_GAMEOVER, SFX_EXTRALIFE, SFX_BLIP, SFX_JOIN, SFX_LOWFUEL, SFX_LASER,
-    SFX_BUMP, SFX_START, SFX_COUNT
+    SFX_BUMP, SFX_START, SFX_ROUGH, SFX_COUNT
 };
 
 enum VoiceClip { VC_HEY, VC_UP, VC_THANKS, VC_OUCH, VC_PAD1, VC_COUNT = VC_PAD1 + 9 };
@@ -34,6 +35,18 @@ public:
         if (!dev) { SDL_Log("audio: %s", SDL_GetError()); return false; }
         buildSfx();
         loadVoices(assetDir);
+        // Thruster loop from assets/thrust.wav (the generated rumble stays as fallback)
+        Sample thr;
+        if (loadClip(assetDir + "thrust.wav", thr) && thr.d.size() > 1000) {
+            for (auto& x : thr.d) x /= 0.9f;          // loadClip's voice headroom; keep the clip's own level
+            thrustLoop = std::move(thr);
+        } else SDL_Log("audio: thrust.wav not found, using generated thrust sound");
+        // Rough-landing thud from assets/rough.wav (falls back to the bump sound)
+        Sample rough;
+        if (loadClip(assetDir + "rough.wav", rough) && !rough.d.empty()) {
+            for (auto& x : rough.d) x /= 0.9f;
+            sfx[SFX_ROUGH] = std::move(rough);
+        } else sfx[SFX_ROUGH] = sfx[SFX_BUMP];
         for (int i = 0; i < NTHRUST; i++) {
             ch[i].s = &thrustLoop; ch[i].loop = true; ch[i].active = true;
             ch[i].vol = 0; ch[i].target = 0; ch[i].pos = (size_t)(i * 3001) % thrustLoop.d.size();

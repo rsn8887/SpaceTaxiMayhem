@@ -1228,7 +1228,7 @@ static void updateTaxi(int i, float dt) {
                 if (rvy > ROUGH_VY) {
                     // rough landing: the taxi shakes; a passenger aboard loses the tip and part of the fare
                     p.roughT = 0.45f;
-                    audio.play(SFX_BUMP, 1.f, panOf(p.cx()));
+                    audio.play(SFX_ROUGH, 1.f, panOf(p.cx()));
                     addText(p.cx(), p.y - 14, "ROUGH LANDING!", rgb(255, 200, 80));
                     if (p.pass >= 0 && !PASS[p.pass].up) {
                         Passenger& q = PASS[p.pass];
@@ -1238,7 +1238,7 @@ static void updateTaxi(int i, float dt) {
                 }
                 p.x = (float)ix; p.y = (float)(iy - k);
                 p.vx = p.vy = 0; p.landed = true; p.landedT = 0; p.noMoneyShown = false; p.noFuelT = 0;
-                audio.play(SFX_LAND, 0.7f, panOf(p.cx()));
+                if (p.roughT <= 0) audio.play(SFX_LAND, 0.7f, panOf(p.cx()));   // rough landings have their own sound
                 onLanded(i);
                 return;
             }
