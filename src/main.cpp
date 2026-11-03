@@ -2490,9 +2490,10 @@ static void renderScene() {
         q.top = TOP_COLS[top]; q.bottom = g ? SKIRT_COLS[bot] : PANTS_COLS[bot]; q.relx = relx; q.anim = anim; q.dir = dir;
     };
     mk(0, '2', 4, 1, 1, 3, 1, 0, 6, PS_WAIT, 0.1f, 1);          // walking to the parked red taxi
-    mk(1, '5', 1, 0, 4, 0, 2, 0, 0, PS_WAIT, 0.15f, 1);          // waving on pad 5
-    mk(2, '6', 5, 1, 3, 4, 7, 3, 26, PS_WAIT, 3.f, -1);          // standing on pad 6
+    mk(1, '5', 1, 0, 4, 0, 2, 0, 0, PS_WAIT, 0.15f, 1); PASS[1].age = AGE_KID;    // kid waving on pad 5
+    mk(2, '6', 5, 1, 3, 5, 8, 3, 26, PS_WAIT, 3.f, -1); PASS[2].age = AGE_OLD;    // old woman with a stick on pad 6
     mk(3, '3', 0, 0, 0, 2, 5, 1, 1, PS_BEAM, 0, 1); PASS[3].beamT = 0.5f;   // delivered, beaming out
+    mk(5, '4', 0, 0, 2, 5, 9, 2, 22, PS_WAIT, 3.f, -1); PASS[5].age = AGE_OLD;    // old man with a stick on pad 4
     mk(4, '7', 2, 0, 2, 1, 0, 2, 0, PS_RIDE, 0, 1); PASS[4].dest = '7'; PASS[4].taxi = 0; P[0].pass = 4; P[0].tip = 18;
     LV.delivered = 3;
     rebuildMasks();
