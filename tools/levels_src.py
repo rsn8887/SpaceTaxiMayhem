@@ -14,6 +14,9 @@ Map legend (40x27 tiles of 8x8 px):
   Y / y  slow automatic door (phase 0 / 1/2): vertical runs slide up, horizontal runs slide left
   Q  switch of channel 1 (doors J closed while OFF, j closed while ON)
   U  switch of channel 2 (doors K closed while OFF, k closed while ON)
+ levels 41-45 add:
+  M  magnet field (gravity pulls up)   m  magnet (solid block, horseshoe graphic)
+  r  controls-reversed field
 """
 import sys, os
 
@@ -34,6 +37,7 @@ class M:
         s.plats, s.mines = [], []
         s.holes, s.air, s.weather, s.hint = [], [], 0, ""
         s.doorPeriod = s.gunPeriod = s.wind = None
+        s.meteors, s.dark, s.sign = 0, False, None
 
     def fill(s, x, y, w, h, c, only_empty=False):
         for yy in range(y, y + h):
@@ -107,8 +111,8 @@ L.append(m)
 
 # 2 ---------------------------------------------------------------
 m = M("TWIN TOWERS", 1, 1.0, 5)
-m.fill(14, 5, 4, 20, "%").fill(22, 5, 4, 20, "%")
-m.pad(14, 4, 4, "1").pad(22, 4, 4, "2")
+m.fill(14, 6, 4, 19, "%").fill(22, 6, 4, 19, "%")
+m.pad(14, 5, 4, "1").pad(22, 5, 4, "2")
 m.ledge(3, 9, 4, "3", "%").ledge(32, 9, 4, "4", "%")
 m.ledge(8, 16, 4, "5", "%").ledge(28, 16, 4, "6", "%")
 m.fill(1, 22, 7, 4, "%").pad(2, 21, 4, "F")
@@ -153,8 +157,8 @@ m.ledge(2, 6, 4, "1", "%").ledge(33, 6, 4, "2", "%").ledge(2, 15, 4, "3", "%").l
 m.pad(2, 24, 4, "F").pad(33, 24, 4, "7")
 m.fill(10, 1, 3, 3, "%").fill(27, 1, 3, 3, "%").fill(11, 4, 1, 1, "%").fill(28, 4, 1, 1, "%")
 m.fill(18, 21, 4, 4, "%")
-m.plat(8, 11, 28, 11, 4, 9.0, 0.0, "5")
-m.plat(28, 19, 8, 19, 4, 9.5, 0.0, "6")
+m.plat(7, 11, 27, 11, 6, 9.0, 0.0, "5")      # 6 wide: easier to land on, same centre line as before
+m.plat(27, 19, 7, 19, 6, 9.5, 0.0, "6")
 L.append(m)
 
 # 7 ---------------------------------------------------------------
@@ -319,6 +323,7 @@ L.append(m)
 # 9 crystal cave, 10 the void) and new mechanics.
 # =================================================================
 OCEAN, JUNGLE, CAVE, VOID = 7, 8, 9, 10
+VOLCANO, CIRCUIT = 11, 12
 
 # 21 --------------------------------------------------------------
 m = M("OIL RIG", OCEAN, 1.0, 5)
@@ -326,7 +331,7 @@ m.weather = 1; m.hint = "DON'T TOUCH THE WATER!"
 m.water(23)
 m.gled(3, 8, 5, "1").gled(32, 8, 5, "2").gled(16, 12, 6, "F")
 m.gled(7, 17, 5, "3").gled(28, 17, 5, "4").gled(17, 20, 6, "5")
-m.fill(10, 4, 9, 1, "=").fill(14, 5, 1, 2, "|")          # crane boom
+m.fill(10, 4, 9, 1, "=").fill(14, 5, 1, 18, "|", only_empty=True)   # crane boom on a leg down to the water
 m.fill(1, 21, 3, 2, "%").fill(36, 21, 3, 2, "%")          # concrete pylons
 L.append(m)
 
@@ -569,7 +574,7 @@ L.append(m)
 # 41 --------------------------------------------------------------
 # A stepped mountain from the top left down to the bottom right (after Air Taxi):
 # a pad on every step, fuel at the bottom, and a steady wind blowing left over all of it.
-m = M("CAVERN STAIRWAY", CAVE, 1.0, 6)
+m = M("VOLCANIC STAIRWAY", VOLCANO, 1.0, 6)
 m.weather = 3; m.wind = 0.4; m.hint = "A STRONG WIND BLOWS TO THE LEFT"
 steps = [(1, 5, 5, "1"), (7, 11, 9, "2"), (13, 17, 13, "3"), (19, 23, 17, "4"), (25, 29, 21, "5")]
 for x0, x1, top, pad in steps:
@@ -578,6 +583,63 @@ for x0, x1, top, pad in steps:
     m.pad(x0, top - 1, x1 - x0 + 1, pad)
 m.fill(31, 25, 8, 1, "%").pad(32, 24, 6, "F")                   # the bottom, with the fuel pad
 m.fill(1, 1, 38, 24, "<", only_empty=True)                      # wind everywhere above the mountain
+L.append(m)
+
+# =================================================================
+# Levels 42-45: volcano world (11) and circuit board world (12)
+# =================================================================
+
+# 42 --------------------------------------------------------------
+# Two magnets hang over pads 1 and 2: inside their fields gravity pulls UP, into the spikes.
+m = M("MAGNET LAB", CIRCUIT, 1.0, 5)
+m.hint = "MAGNETS PULL YOU UP - INTO THE SPIKES!"
+m.fill(1, 24, 38, 2, "#")
+for x0, pad in ((3, "1"), (31, "2")):
+    m.fill(x0, 1, 6, 2, "m")                         # the magnet
+    m.fill(x0, 3, 6, 1, "#")                         # its mounting plate
+    m.fill(x0, 4, 6, 1, "X")                         # spikes pointing down at the taxis
+    m.fill(x0, 5, 6, 7, "M")                         # the field: everything here falls upwards
+    m.ledge(x0 + 1, 13, 4, pad)                      # the pad right under it (one free row above)
+m.ledge(17, 13, 6, "5")
+m.pad(8, 23, 5, "3").pad(27, 23, 5, "4").pad(17, 23, 6, "F")
+m.fill(13, 18, 3, 2, "#").fill(24, 18, 3, 2, "#")   # chips on the board
+L.append(m)
+
+# 43 --------------------------------------------------------------
+# Meteors rain down diagonally; the rock tower's overhang shelters pad 3.
+m = M("METEOR SHOWER", VOLCANO, 1.0, 5)
+m.meteors = 1.4; m.hint = "TAKE COVER FROM THE METEORS!"
+m.fill(1, 24, 38, 2, "%")
+m.fill(2, 22, 7, 2, "%").pad(3, 21, 5, "1")           # three pads near the bottom
+m.fill(31, 22, 7, 2, "%").pad(32, 21, 5, "2")
+m.pad(10, 23, 5, "F")
+m.fill(22, 14, 3, 10, "%").fill(21, 13, 6, 1, "%").pad(21, 12, 6, "4")   # rising tower with a pad on top
+m.fill(15, 17, 7, 2, "%")                             # overhang off the tower
+m.pad(16, 23, 5, "3")                                 # ...sheltering the pad below it
+L.append(m)
+
+# 44 --------------------------------------------------------------
+# Nearly the whole level reverses the controls; only small areas around the pads are normal.
+m = M("INVERTER", CIRCUIT, 1.0, 5)
+m.hint = "CONTROLS ARE REVERSED!"
+m.fill(1, 24, 38, 2, "#")
+m.ledge(2, 6, 5, "1").ledge(33, 6, 5, "2")
+m.pad(2, 23, 5, "3").pad(33, 23, 5, "4").pad(17, 23, 6, "F")
+m.fill(9, 15, 3, 3, "#").fill(28, 11, 3, 3, "#")   # chips in the way
+m.fill(1, 1, 38, 23, "r", only_empty=True)
+for x, y, w in ((2, 6, 5), (33, 6, 5), (2, 23, 5), (33, 23, 5), (17, 23, 6)):
+    m.fill(x - 1, y - 4, w + 2, 4, ".")              # normal controls right around the pads
+m.sign = (20, 12)
+L.append(m)
+
+# 45 --------------------------------------------------------------
+# Pitch dark: only the taxis can be seen, and lightning now and then shows the rest.
+m = M("BLACKOUT", VOLCANO, 1.0, 5)
+m.dark = True; m.hint = "WAIT FOR THE LIGHTNING!"
+m.fill(1, 24, 38, 2, "%")
+m.ledge(2, 8, 8, "1", "%").ledge(30, 8, 8, "2", "%").ledge(2, 17, 8, "3", "%").ledge(30, 17, 8, "4", "%")
+m.pad(16, 23, 8, "F")
+m.fill(19, 9, 2, 9, "%").fill(14, 13, 3, 2, "%").fill(23, 13, 3, 2, "%")
 L.append(m)
 
 # ---------------------------------------------------------------- validate
@@ -598,7 +660,7 @@ def pads_of(rows):
 # reachability for levels 21+: a taxi-sized box (3x2 tiles) must be able to fly from
 # every pad to every other pad and to the exit gate (doors count as open, moving walls
 # are ignored, black-hole cores, water, spikes, turrets and radar dishes block)
-BLOCK = set("#%=123456789FGZRX~")
+BLOCK = set("#%=123456789FGZRX~m")
 def check_new(i, m, rows, pads):
     err = 0
     blocked = [[rows[y][x] in BLOCK for x in range(W)] for y in range(H)]
@@ -660,7 +722,8 @@ for i, m in enumerate(L):
             print(f"L{i+1}: pad {c} too narrow"); errors += 1
         for yy in range(y - 3, y):
             for xx in range(x, x + w):
-                if rows[yy][xx] not in CLEAR and not (i >= 20 and yy == y - 3 and rows[yy][xx] == "c"):   # a taxi on the pad fits in 2 rows
+                if rows[yy][xx] not in CLEAR and not (i >= 20 and yy == y - 3 and rows[yy][xx] == "c") \
+                        and not (i >= 40 and rows[yy][xx] in "Mr"):   # a taxi on the pad fits in 2 rows / fields above pads
                     print(f"L{i+1}: pad {c} blocked at {xx},{yy} by '{rows[yy][xx]}'"); errors += 1
     if i >= 20:
         errors += check_new(i, m, rows, pads)
@@ -697,6 +760,9 @@ with open(out, "w") as f:
         if m.gunPeriod: f.write("      d.gunPeriod = %s;\n" % F(m.gunPeriod))
         if m.hint: f.write('      d.hint = "%s";\n' % m.hint)
         if m.wind: f.write("      d.wind = %s;\n" % F(m.wind))
+        if m.meteors: f.write("      d.meteors = %s;\n" % F(m.meteors))
+        if m.dark: f.write("      d.dark = true;\n")
+        if m.sign: f.write("      d.sign = {%s,%s};\n" % (F(m.sign[0]), F(m.sign[1])))
         f.write("      L.push_back(d); }\n")
     f.write("}\n")
 print(f"OK: {len(L)} levels written to src/levels.inc")

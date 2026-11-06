@@ -3,7 +3,7 @@ Space Taxi Mayhem
 
 A multiplayer Space Taxi game with 1-5 local players, inspired by the Amiga PD classic Space Taxi 3.
 
-Pick up passengers, land gently and without sliding sideways on the pad they call out, and most importantly don't crash. There are 41 levels, divided into 8 level sets, with many features such as switches, moving platforms, lasers, wind, and many more. Passengers come in all kinds: men, women, quick kids with high voices and slow old folks with walking sticks, each with a voice of their own. Fly with the D-pad and remember that you can't thrust sideways while the landing gear (A/B) is down.
+Pick up passengers, land gently and without sliding sideways on the pad they call out, and most importantly don't crash. There are 45 levels, divided into 9 level sets, with many features such as switches, moving platforms, lasers, wind, and many more. Passengers come in all kinds: men, women, quick kids with high voices and slow old folks with walking sticks, each with a voice of their own. Fly with the D-pad and remember that you can't thrust sideways while the landing gear (A/B) is down.
 
 ![Title screen](screenshots/title.png)
 ![In-game](screenshots/ingame.png)
