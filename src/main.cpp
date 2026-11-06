@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <unordered_map>
+#include <utility>
 #include "audio.hpp"
 #ifdef __SWITCH__
 #include <switch.h>
@@ -3753,7 +3754,7 @@ static int runSelfTest() {
     }
     // 19) levels 21-40 mechanics
     {
-        auto fresh = [&](int L) {
+        auto fresh = [&](int L) -> Player& {
             for (int k = 0; k < MAXP; k++) P[k] = Player();
             P[0].joined = true; P[0].lives = 99;
             startLevel(L); gstate = GS_PLAY;
@@ -3761,7 +3762,7 @@ static int runSelfTest() {
             spawnT = 999;
             Player& p = P[0];
             p = Player(); p.joined = true; p.alive = true; p.lives = 99; p.gear = false; p.gearExt = 0; p.fuel = 100; p.airT = 9;
-            return std::ref(p);
+            return p;
         };
         auto findLevel = [&](auto pred) { for (int L = 20; L < NLEVELS; L++) { startLevel(L); if (pred()) return L; } return -1; };
         int bad = 0;
