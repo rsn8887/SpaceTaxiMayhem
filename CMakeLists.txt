@@ -38,7 +38,7 @@ if(PLATFORM_UC STREQUAL "VITA" AND NOT CMAKE_TOOLCHAIN_FILE)
   set(CMAKE_TOOLCHAIN_FILE "$ENV{VITASDK}/share/vita.toolchain.cmake" CACHE FILEPATH "VitaSDK toolchain")
 endif()
 
-project(SpaceTaxiMayhem VERSION 1.3.0 LANGUAGES C CXX)
+project(SpaceTaxiMayhem VERSION 1.4.0 LANGUAGES C CXX)
 
 # Also recognise Switch / Vita builds configured via the toolchain file alone
 if(NINTENDO_SWITCH)
@@ -109,7 +109,7 @@ elseif(PLATFORM_UC STREQUAL "VITA")
   endif()
   target_link_libraries(spacetaxi PRIVATE SceShaccCgExt taihen_stub SceShaccCg_stub)
 
-  # VPK version is ##.## : 1.3.0 -> "01.30"
+  # VPK version is ##.## : 1.4.0 -> "01.40"
   math(EXPR _vmin "${PROJECT_VERSION_MINOR} * 10 + ${PROJECT_VERSION_PATCH}")
   set(_vmaj "${PROJECT_VERSION_MAJOR}")
   if(_vmaj LESS 10)

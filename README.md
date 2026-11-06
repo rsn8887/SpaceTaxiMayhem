@@ -52,7 +52,7 @@ cmake --build build -j
 This builds `Space Taxi Mayhem.app`. To make a self-contained app that can be copied to the Applications folder on any Mac (SDL libraries included), or a .dmg to share:
 ```
 cmake --install build --prefix dist     # -> dist/Space Taxi Mayhem.app
-cd build && cpack                        # -> SpaceTaxiMayhem-1.3.0-macOS.dmg
+cd build && cpack                        # -> SpaceTaxiMayhem-1.4.0-macOS.dmg
 ```
 The app is ad-hoc signed but not notarized, so on another Mac open it the first time with right-click → Open (or run `xattr -dr com.apple.quarantine "/Applications/Space Taxi Mayhem.app"`).
 
