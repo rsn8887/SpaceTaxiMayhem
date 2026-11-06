@@ -498,15 +498,17 @@ L.append(m)
 # 35 --------------------------------------------------------------
 m = M("CRYSTAL LOCKS", CAVE, 1.0, 6)
 m.hint = "THREE SWITCHES, THREE COLOURS"
-m.fill(1, 9, 38, 1, "#").fill(1, 17, 38, 1, "#").fill(1, 23, 38, 3, "%")      # metal decks: flat for the switches
-m.fill(13, 10, 1, 7, "%").fill(26, 10, 1, 7, "%").fill(13, 18, 1, 5, "%").fill(26, 18, 1, 5, "%")
+# top tier rows 1-8, middle tier rows 10-18, bottom tier rows 20-24, one-row floor
+m.fill(1, 9, 38, 1, "#").fill(1, 19, 38, 1, "#").fill(1, 25, 38, 1, "%")      # metal decks: flat for the switches
+m.fill(13, 10, 1, 9, "%").fill(26, 10, 1, 9, "%").fill(13, 20, 1, 5, "%").fill(26, 20, 1, 5, "%")
 m.fill(4, 9, 4, 1, "D").fill(32, 9, 4, 1, "E").fill(17, 9, 6, 1, ".")
-m.fill(13, 12, 1, 4, "J").fill(26, 12, 1, 4, "j")
-m.fill(4, 17, 4, 1, "k").fill(20, 17, 4, 1, "K").fill(32, 17, 4, 1, "E")
-m.fill(13, 19, 1, 4, "D").fill(26, 19, 1, 4, "J")
-m.ledge(3, 4, 5, "1", "%").ledge(32, 4, 5, "2", "%").put(28, 8, "S")
-m.pad(3, 16, 5, "3").put(10, 16, "Q").pad(32, 16, 5, "4").put(28, 16, "U").pad(14, 16, 5, "5")
-m.pad(3, 22, 5, "6").pad(17, 22, 6, "F").pad(32, 22, 5, "7")
+m.fill(13, 13, 1, 4, "J").fill(26, 13, 1, 4, "j")
+m.fill(4, 19, 4, 1, "k").fill(20, 19, 4, 1, "K").fill(32, 19, 4, 1, "E")
+m.fill(13, 21, 1, 4, "D").fill(26, 21, 1, 4, "J")
+m.fill(2, 5, 7, 1, "%").pad(3, 4, 5, "1").fill(31, 5, 7, 1, "%").pad(32, 4, 5, "2").put(28, 8, "S")   # thin rock shelves
+m.fill(2, 15, 7, 1, "%").pad(3, 14, 5, "3").fill(31, 15, 7, 1, "%").pad(32, 14, 5, "4")   # raised: the doors below stay clear
+m.put(10, 18, "Q").put(28, 18, "U").pad(14, 18, 5, "5")
+m.pad(3, 24, 5, "6").pad(17, 24, 6, "F").pad(32, 24, 5, "7")
 L.append(m)
 
 # 36 --------------------------------------------------------------
@@ -592,16 +594,19 @@ L.append(m)
 # 42 --------------------------------------------------------------
 # Two magnets hang over pads 1 and 2: inside their fields gravity pulls UP, into the spikes.
 m = M("MAGNET LAB", CIRCUIT, 1.0, 5)
-m.hint = "MAGNETS PULL YOU UP - INTO THE SPIKES!"
+m.hint = "MAGNETS PULL YOU UP!"
 m.fill(1, 24, 38, 2, "#")
-for x0, pad in ((3, "1"), (31, "2")):
+for x0, pad, low in ((3, "1", "3"), (31, "2", "4")):
     m.fill(x0, 1, 6, 2, "m")                         # the magnet
     m.fill(x0, 3, 6, 1, "#")                         # its mounting plate
     m.fill(x0, 4, 6, 1, "X")                         # spikes pointing down at the taxis
     m.fill(x0, 5, 6, 7, "M")                         # the field: everything here falls upwards
-    m.ledge(x0 + 1, 13, 4, pad)                      # the pad right under it (one free row above)
+    m.pad(x0 + 1, 13, 4, pad).fill(x0, 14, 6, 2, "#")   # the pad right under it (one free row above), on a flat block
+    m.fill(x0, 16, 6, 1, "X")                        # spikes under the block, facing the lower field
+    m.fill(x0, 17, 6, 5, "M", only_empty=True)       # a second field under the pad's support...
+    m.pad(x0 + 1, 23, 4, low)                        # ...above the pad below (one free row above it)
 m.ledge(17, 13, 6, "5")
-m.pad(8, 23, 5, "3").pad(27, 23, 5, "4").pad(17, 23, 6, "F")
+m.pad(17, 23, 6, "F")
 m.fill(13, 18, 3, 2, "#").fill(24, 18, 3, 2, "#")   # chips on the board
 L.append(m)
 
@@ -610,9 +615,9 @@ L.append(m)
 m = M("METEOR SHOWER", VOLCANO, 1.0, 5)
 m.meteors = 1.4; m.hint = "TAKE COVER FROM THE METEORS!"
 m.fill(1, 24, 38, 2, "%")
-m.fill(2, 22, 7, 2, "%").pad(3, 21, 5, "1")           # three pads near the bottom
+m.fill(2, 22, 7, 2, "%").pad(3, 21, 5, "1")           # pads near the bottom
 m.fill(31, 22, 7, 2, "%").pad(32, 21, 5, "2")
-m.pad(10, 23, 5, "F")
+m.pad(25, 23, 5, "F")                                 # fuel in the gap between the tower and pad 2
 m.fill(22, 14, 3, 10, "%").fill(21, 13, 6, 1, "%").pad(21, 12, 6, "4")   # rising tower with a pad on top
 m.fill(15, 17, 7, 2, "%")                             # overhang off the tower
 m.pad(16, 23, 5, "3")                                 # ...sheltering the pad below it

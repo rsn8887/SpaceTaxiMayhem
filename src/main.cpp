@@ -544,6 +544,7 @@ static int startLevel_ = 0;
 static const int NREGSETS = NLEVELS / 5;          // 8 regular sets
 static const int NSETS = NREGSETS + 1;            // + "LEVEL SET COMPLETE"
 static int selSet = 0;
+static int testLevel = -1;     // debug only (--debug-level N): every game starts at level N; not shown anywhere
 static void setRange(int set, int& first, int& last) {
     if (set >= NREGSETS) { first = 0; last = NLEVELS - 1; return; }
     first = set * 5; last = set == NREGSETS - 1 ? NLEVELS - 1 : first + 4;
@@ -1022,6 +1023,7 @@ static bool isWall(char c) { return c == '#' || c == '%'; }
 // fields (not solid): n thrust-dead, c cloaking, M magnet (gravity reversed), r controls reversed
 static bool isZoneC(char c) { return c == 'n' || c == 'c' || c == 'M' || c == 'r'; }
 static char zoneAt(int tx, int ty) { return LV.T(tx, ty); }
+static const float DARK_FLASH = 1.0f;   // how long a lightning flash lights up a dark level (s)
 static bool isPadC(char c) { return (c >= '1' && c <= '9') || c == 'F'; }
 
 static inline void putS(int x, int y, uint32_t c, bool solid, bool hz = false) {
@@ -1671,8 +1673,51 @@ static bool slotFree(const Slot& s, int self) {
     }
     return true;
 }
+// Can a taxi fly from this spawn spot to the exit gate with the doors as they are right now?
+// (Spots behind a closed switch door - e.g. the rooms in Grand Central - would trap a player
+// whose switch is outside.) Flood fill over tiles with a taxi-sized 2x2 box.
+static std::vector<uint8_t> reachFromGate() {
+    std::vector<uint8_t> reach(MW * MH, 0);
+    auto blocked = [](char c) {
+        return isWall(c) || isPadC(c) || c == '=' || c == 'X' || c == 'Z' || c == 'R' || c == '~' || c == 'm' || c == 'G' || doorSolid(c, LV);
+    };
+    auto fits = [&](int x, int y) {
+        if (x < 0 || y < 0 || x + 2 > MW || y + 2 > MH) return false;
+        for (int yy = y; yy < y + 2; yy++) for (int xx = x; xx < x + 2; xx++) if (blocked(LV.tile[yy][xx])) return false;
+        return true;
+    };
+    int gx = 0;
+    for (int x = 0; x < MW; x++) if (LV.tile[0][x] == 'G') { gx = x; break; }
+    std::vector<std::pair<int, int>> q;
+    for (int x = gx - 1; x <= gx + 3; x++) if (fits(x, 1)) { reach[1 * MW + x] = 1; q.push_back({x, 1}); }
+    for (size_t k = 0; k < q.size(); k++) {
+        int x = q[k].first, y = q[k].second;
+        const int D[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (auto& d : D) {
+            int nx = x + d[0], ny = y + d[1];
+            if (nx < 0 || ny < 0 || nx >= MW || ny >= MH || reach[ny * MW + nx] || !fits(nx, ny)) continue;
+            reach[ny * MW + nx] = 1; q.push_back({nx, ny});
+        }
+        // teleporters
+        char c = LV.tile[y][x];
+        if (c == 'T' || c == 't')
+            for (int yy = 0; yy < MH; yy++) for (int xx = 0; xx < MW; xx++)
+                if ((LV.tile[yy][xx] == 'T' || LV.tile[yy][xx] == 't') && !reach[yy * MW + xx] && fits(xx, yy)) { reach[yy * MW + xx] = 1; q.push_back({xx, yy}); }
+    }
+    return reach;
+}
+static bool slotReachable(const Slot& s, const std::vector<uint8_t>& reach) {
+    int bottom = s.pad < 0 ? s.y + 10 : LV.pads[s.pad].y;          // taxi bottom (px)
+    int cx = (s.x + 8) / 8, top = (bottom - 10) / 8;
+    for (int x = cx - 2; x <= cx; x++)
+        for (int y = top - 1; y <= top; y++)
+            if (x >= 0 && y >= 0 && x < MW && y < MH && reach[y * MW + x]) return true;
+    return false;
+}
+
 static void respawn(int i) {
     float best = -1; int bi = -1;
+    std::vector<uint8_t> reach = reachFromGate();
     for (int k = 0; k < (int)LV.slots.size(); k++) {
         const Slot& s = LV.slots[k];
         if (!slotFree(s, i)) continue;
@@ -1689,6 +1734,7 @@ static void respawn(int i) {
         if (hz) md *= 0.1f;
         if (s.pad < 0) md *= 0.6f;     // prefer pads over mid-air spawns
         md += rng.f();
+        if (!slotReachable(s, reach)) md *= 1e-6f;   // never behind a closed door unless there is no other choice
         if (md > best) { best = md; bi = k; }
     }
     if (bi < 0) return;  // try again next frame
@@ -1966,12 +2012,14 @@ static void updateTaxi(int i, float dt) {
     }
 
     p.airT += dt;
-    float g = G0 * LV.def->gravity;
-    if (LV.hasZones && inZone(p.cx(), p.cy(), 'M')) g = -g;       // magnet field: gravity pulls up
+    float g = G0 * LV.def->gravity, thrUp = THRUST_UP, thrDown = THRUST_DOWN;
+    if (LV.hasZones && inZone(p.cx(), p.cy(), 'M')) {     // magnet field: the world exactly upside down -
+        g = -g; std::swap(thrUp, thrDown);                 // gravity pulls up, the strong thrust pushes down
+    }
     int tx = std::clamp((int)(p.cx() / 8), 0, MW - 1), ty = std::clamp((int)(p.cy() / 8), 0, MH - 1);
     float side = THRUST_SIDE;
     float ax = ((p.thR ? 1 : 0) - (p.thL ? 1 : 0)) * side + LV.windX[ty][tx];
-    float ay = g - (p.thU ? THRUST_UP : 0) + (p.thD ? THRUST_DOWN : 0) + LV.windY[ty][tx];
+    float ay = g - (p.thU ? thrUp : 0) + (p.thD ? thrDown : 0) + LV.windY[ty][tx];
     // black holes pull everything towards their centre
     for (auto& hd : LV.def->holes) {
         float dx = hd.x * 8 - p.cx(), dy = hd.y * 8 - p.cy(), d = std::max(4.f, std::hypot(dx, dy));
@@ -2273,7 +2321,7 @@ static void updateWorld(float dt) {
         L.boltT -= dt;
         if (L.flashT > 0) L.flashT -= dt;
         if (L.boltT <= 0) {
-            L.flashT = L.def->dark ? 0.6f : 0.35f;
+            L.flashT = L.def->dark ? DARK_FLASH : 0.35f;
             L.boltT = L.def->dark ? rng.r(3.f, 6.5f) : rng.r(5.f, 11.f);
             L.boltSeed = rng.i(100000); L.boltX = rng.r(30, WW - 30.f);
             audio.play(SFX_THUNDER, 0.7f, (L.boltX - WW / 2) / (WW / 2) * 0.6f);
@@ -2402,13 +2450,20 @@ static void startLevel(int idx) {
     parts.clear(); ftexts.clear();
     spawnT = 1.0f; upSpawnT = 0; upCarrier = -1;
     rebuildMasks();
+    // starting spots: the ones a taxi can fly out of come first (never start behind a closed door)
+    std::vector<int> order;
+    {
+        std::vector<uint8_t> reach = reachFromGate();
+        for (int k = 0; k < (int)LV.slots.size(); k++) if (slotReachable(LV.slots[k], reach)) order.push_back(k);
+        for (int k = 0; k < (int)LV.slots.size(); k++) if (!slotReachable(LV.slots[k], reach)) order.push_back(k);
+    }
     int s = 0;
     for (int i = 0; i < MAXP; i++) {
         Player& p = P[i];
         p.levelFares = 0; p.exited = false;
         if (!p.joined) continue;
         if (p.lives <= 0) { p.alive = false; continue; }
-        if (s < (int)LV.slots.size()) placeOnSlot(p, LV.slots[s++]);
+        if (s < (int)order.size()) placeOnSlot(p, LV.slots[order[s++]]);
         else { p.alive = false; p.deadT = 0.5f; }
         p.invuln = 0;
     }
@@ -2422,6 +2477,10 @@ static void newGame() {
     }
     audio.play(SFX_START);
     int last; setRange(selSet, startLevel_, last);
+    if (testLevel >= 0) {                       // play-testing: start right at that level, finish its set
+        if (testLevel < startLevel_ || testLevel > last) for (int st = 0; st < NREGSETS; st++) { int a, b; setRange(st, a, b); if (testLevel >= a && testLevel <= b) selSet = st; }
+        startLevel_ = testLevel;
+    }
     startLevel(startLevel_);
 }
 
@@ -2816,7 +2875,7 @@ static void drawWorld() {
     for (int y = 0; y < WH; y++) memcpy(&fb[(y + MAPY) * SW], &L.img[y * WW], WW * 4);
     const Theme& th = *L.th;
     // dark levels: a lightning bolt in the background (behind the rock), lighting everything up
-    if (L.def->dark && L.flashT > 0.25f) {
+    if (L.def->dark && L.flashT > DARK_FLASH * 0.3f) {
         Rng br(L.boltSeed);
         auto plot = [&](int px, int py, uint32_t c) {
             if (px < 0 || py < 0 || px >= WW || py >= WH || L.sSolid[py * WW + px]) return;
@@ -3039,6 +3098,21 @@ static void drawWorld() {
         if (blink) for (int k = 0; k < 4; k++) pblend(mx + 4 + (k % 2 ? 1 : -1), my + 4 + (k / 2 ? 1 : -1), rgb(255, 60, 60), 0.4f);
     }
     drawFeatures();
+    // dark levels: everything except passengers and taxis (with their flames) is pitch black - truly
+    // black, so turning up the screen brightness shows nothing - until lightning flashes
+    if (L.def->dark) {
+        float f = L.flashT > 0 ? L.flashT / DARK_FLASH : 0.f;
+        if (f > 0 && (int)(L.flashT * 30) % 7 == 0) f *= 0.4f;     // flicker
+        float light = std::min(1.f, f * 1.6f);
+        int sc = (int)(light * 256);
+        for (int y = 0; y < WH; y++) {
+            uint32_t* row = &fb[(y + MAPY) * SW];
+            for (int x = 0; x < WW; x++) {
+                uint32_t c = row[x];
+                row[x] = 0xFF000000u | ((((c >> 16) & 255) * sc >> 8) << 16) | ((((c >> 8) & 255) * sc >> 8) << 8) | (((c & 255) * sc) >> 8);
+            }
+        }
+    }
     // passengers
     for (auto& q : PASS) {
         if (q.state == PS_WAIT) {
@@ -3047,20 +3121,6 @@ static void drawWorld() {
         } else if (q.state == PS_EXIT || q.state == PS_BEAM) {
             const PadE& pd = L.pads[q.pad];
             drawPassenger(q, pd.x + (int)q.relx, pd.y - 10 + MAPY);
-        }
-    }
-    // dark levels: everything but the taxis (and their flames) goes black, unless lightning flashes
-    if (L.def->dark) {
-        float f = L.flashT > 0 ? L.flashT / 0.6f : 0.f;
-        if (f > 0 && (int)(L.flashT * 30) % 5 == 0) f *= 0.4f;     // flicker
-        float light = 0.035f + 0.965f * std::min(1.f, f * 1.6f);
-        int sc = (int)(light * 256);
-        for (int y = 0; y < WH; y++) {
-            uint32_t* row = &fb[(y + MAPY) * SW];
-            for (int x = 0; x < WW; x++) {
-                uint32_t c = row[x];
-                row[x] = 0xFF000000u | ((((c >> 16) & 255) * sc >> 8) << 16) | ((((c >> 8) & 255) * sc >> 8) << 8) | (((c & 255) * sc) >> 8);
-            }
         }
     }
     // taxis
@@ -4371,8 +4431,16 @@ static int runSelfTest() {
             Player& q = fresh(Lm2); q.x = zx * 8.f; q.y = zy * 8.f - 1; q.cur.d = true;
             for (int t = 0; t < 20; t++) updateTaxi(0, 1 / 60.f);
             float held = q.vy;
-            bool ok = upFree < -8 && held > 0 && held < 3;
-            printf("magnet (L%d): falling up at %.1f px/s after 1/3 s, with full down-thrust %.1f px/s: %s\n", Lm2 + 1, -upFree, held, ok ? "ok" : "WRONG");
+            // the same taxi in normal air: falls down / climbs with the up thruster - exactly mirrored
+            Player& r = fresh(Lm2); r.x = 150; r.y = 60;
+            for (int t = 0; t < 20; t++) updateTaxi(0, 1 / 60.f);
+            float fallFree = r.vy;
+            Player& u = fresh(Lm2); u.x = 150; u.y = 60; u.cur.u = true;
+            for (int t = 0; t < 20; t++) updateTaxi(0, 1 / 60.f);
+            float climb = u.vy;
+            bool ok = upFree < -8 && std::fabs(upFree + fallFree) < 0.01f && std::fabs(held + climb) < 0.01f;
+            printf("magnet (L%d): falls up at %.1f px/s (normal fall %.1f), down-thrust %.1f px/s (normal climb %.1f): exact mirror %s\n",
+                   Lm2 + 1, -upFree, fallFree, held, -climb, ok ? "ok" : "WRONG");
             if (!ok) bad++;
         }
         // reversal field: up thrusts down, left thrusts right; normal next to the pads
@@ -4427,13 +4495,28 @@ static int runSelfTest() {
         {
             int Ldk = findLevel([] { return LV.def->dark; });
             fresh(Ldk); P[0].x = 100; P[0].y = 100; P[0].face = 0;
+            // a waiting passenger on pad 1
+            const PadE& pd1 = LV.pads[padByChar('1')];
+            Passenger& q = PASS[0]; q = Passenger(); q.state = PS_WAIT; q.pad = padByChar('1'); q.relx = 10; q.homeX = 10; q.anim = 3;
+            q.skin = SKIN_TONES[0]; q.hair = HAIR_COLS[0]; q.top = TOP_COLS[0]; q.bottom = PANTS_COLS[0];
+            int qx = pd1.x + 10, qy = pd1.y - 10;
             auto brightness = [&](int x0, int y0, int w, int h) { double s2 = 0; for (int y = y0; y < y0 + h; y++) for (int x = x0; x < x0 + w; x++) { uint32_t c = fb[(y + MAPY) * SW + x]; s2 += ((c >> 16) & 255) + ((c >> 8) & 255) + (c & 255); } return s2 / (w * h * 3); };
             LV.flashT = 0; render();
-            double dark = brightness(0, 0, WW, WH), taxiDark = brightness(102, 102, 12, 5);
-            LV.flashT = 0.55f; LV.boltSeed = 7; LV.boltX = 160; render();
+            // pitch black: every pixel away from taxis and passengers is exactly 0
+            int nonBlack = 0;
+            for (int y = 0; y < WH; y++) for (int x = 0; x < WW; x++) {
+                bool nearTaxi = x >= 96 && x < 122 && y >= 94 && y < 122, nearPass = x >= qx - 4 && x < qx + 12 && y >= qy - 10 && y < qy + 12;
+                if (!nearTaxi && !nearPass && (fb[(y + MAPY) * SW + x] & 0xFFFFFF)) nonBlack++;
+            }
+            double taxiDark = brightness(102, 102, 12, 5);
+            int passPix = 0;      // the passenger's own pixels still show in the dark
+            for (int y = qy - 10; y < qy + 12; y++) for (int x = qx - 4; x < qx + 12; x++) if (fb[(y + MAPY) * SW + x] & 0xFFFFFF) passPix++;
+            LV.flashT = DARK_FLASH * 0.9f; LV.boltSeed = 7; LV.boltX = 160; render();
             double lit = brightness(0, 0, WW, WH), taxiLit = brightness(102, 102, 12, 5);
-            bool ok = dark < 6 && lit > dark * 8 && std::fabs(taxiDark - taxiLit) < 1;
-            printf("darkness (L%d): world brightness %.1f dark vs %.1f in lightning, taxi %.0f / %.0f: %s\n", Ldk + 1, dark, lit, taxiDark, taxiLit, ok ? "ok" : "WRONG");
+            bool ok = nonBlack == 0 && lit > 20 && std::fabs(taxiDark - taxiLit) < 1 && passPix >= 30 && DARK_FLASH >= 1.f;
+            printf("darkness (L%d): %d non-black pixels in the dark, world brightness %.1f in lightning (flash %.1f s), taxi %.0f / %.0f, passenger pixels visible in the dark %d: %s\n",
+                   Ldk + 1, nonBlack, lit, DARK_FLASH, taxiDark, taxiLit, passPix, ok ? "ok" : "WRONG");
+            PASS[0] = Passenger();
             if (!ok) bad++;
         }
         // every new level builds, has its spawn slots, and uses one of the four new graphics sets
@@ -4441,6 +4524,44 @@ static int runSelfTest() {
         for (int L = 20; L < NLEVELS; L++) { startLevel(L); sets[LV.def->theme]++; if ((int)LV.slots.size() < MAXP || LV.th->bg == 0) bad++; }
         printf("levels 21-%d: graphics sets oil rig %d, jungle %d, cave %d, void %d, volcano %d, circuit board %d\n", NLEVELS, sets[7], sets[8], sets[9], sets[10], sets[11], sets[12]);
         if (bad) fails++;
+    }
+    // 22) developer start level (--debug-level): the game starts there and still ends with that level's set
+    {
+        int saveT = testLevel, saveS = selSet;
+        testLevel = 42; selSet = 0;
+        for (int k = 0; k < MAXP; k++) P[k] = Player();
+        P[0].joined = true;
+        newGame();
+        int a, b; setRange(selSet, a, b);
+        bool ok = curLevel == 42 && b == 44;
+        printf("debug start level: game starts at level %d, set ends after level %d: %s\n", curLevel + 1, b + 1, ok ? "ok" : "WRONG");
+        if (!ok) fails++;
+        testLevel = saveT; selSet = saveS; gstate = GS_TITLE;
+    }
+    // 21) never (re)spawn behind a closed switch door (Grand Central: rooms of pads 5 and 6)
+    {
+        int Lg2 = -1;
+        for (int L = 0; L < NLEVELS && Lg2 < 0; L++) if (!strcmp(LEVELDEFS[L].name.c_str(), "GRAND CENTRAL")) Lg2 = L;
+        bool ok = Lg2 >= 0;
+        int trapped = 0, startTrapped = 0;
+        if (ok) {
+            for (int k = 0; k < MAXP; k++) { P[k] = Player(); P[k].joined = true; P[k].lives = 5; }
+            startLevel(Lg2); gstate = GS_PLAY;
+            int p5 = padByChar('5'), p6 = padByChar('6');
+            for (int k = 0; k < MAXP; k++) if (P[k].landPad == p5) startTrapped++;      // red door closed at the start
+            for (int k = 1; k < MAXP; k++) P[k].joined = false;
+            for (int sw = 0; sw < 2; sw++) {
+                LV.switchOn = sw == 1; LV.chOn[0] = LV.switchOn; rebuildMasks();
+                int closedPad = sw ? p6 : p5;
+                for (int t = 0; t < 300; t++) {
+                    P[0].alive = false; respawn(0);
+                    if (P[0].alive && P[0].landPad == closedPad) trapped++;
+                }
+            }
+            LV.switchOn = false;
+        }
+        printf("closed rooms (Grand Central): starts behind a closed door %d, respawns behind a closed door %d of 600\n", startTrapped, trapped);
+        if (!ok || trapped || startTrapped) fails++;
     }
     // 20) level sets: 5 levels each, the last regular set takes the rest, one complete set; finishing a set ends the game
     {
@@ -4482,6 +4603,10 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--dmg-shot") && i + 1 < argc) { dmgShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--livearea-shot") && i + 1 < argc) { liveShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--title-shot") && i + 1 < argc) { titleShot = true; shotPath = argv[++i]; headless = true; }
+        else if (!strcmp(argv[i], "--debug-level") && i + 1 < argc) {   // developer play-testing: start every game at this level
+            testLevel = std::clamp(atoi(argv[++i]) - 1, 0, NLEVELS - 1);
+            for (int st = 0; st < NREGSETS; st++) { int a, b; setRange(st, a, b); if (testLevel >= a && testLevel <= b) selSet = st; }
+        }
         else if (!strcmp(argv[i], "--set-shot") && i + 2 < argc) { setShot = atoi(argv[i + 1]) - 1; shotPath = argv[i + 2]; i += 2; headless = true; }
         else if (!strcmp(argv[i], "--passengers-shot") && i + 1 < argc) { passShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--icon-shot") && i + 1 < argc) { iconShot = true; shotPath = argv[++i]; headless = true; }
