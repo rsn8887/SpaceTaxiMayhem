@@ -28,7 +28,7 @@ static const int MAPY = 0;                     // world y offset on screen (play
 static const int HUDY = 216;                   // status bar: 16 px directly below the playfield
 static const int HUDH = 16;                    // level name / fares line below that (y 232..239)
 static const int MAXP = 5;
-static const int NLEVELS = 20;
+static const int NLEVELS = 41;
 
 static const float G0 = 40.f;          // gravity px/s^2 (scaled per level)
 static const float THRUST_UP = 100.f;
@@ -113,8 +113,11 @@ struct Theme {
     int hillStyle;       // 0 rolling, 1 jagged, 2 city
     bool ring;
     uint32_t accent;
+    int bg = 0;          // 0 classic sky; 1 ocean, 2 jungle, 3 cave, 4 void (levels 21-40)
+    int deco = 0;        // tile decoration: 1 rust, 2 moss/grass, 3 crystals
 };
-static const Theme THEMES[7] = {
+static const int NTHEMES = 11;
+static const Theme THEMES[NTHEMES] = {
     // 0 blue space station
     {rgb(4, 4, 22), rgb(36, 22, 70),
      {rgb(18, 26, 52), rgb(38, 58, 104), rgb(66, 96, 156), rgb(116, 148, 206), rgb(196, 218, 255)},
@@ -150,14 +153,43 @@ static const Theme THEMES[7] = {
      {rgb(30, 34, 44), rgb(58, 64, 80), rgb(94, 102, 122), rgb(140, 148, 168), rgb(206, 212, 228)},
      {rgb(40, 40, 46), rgb(74, 74, 84), rgb(114, 114, 124), rgb(160, 160, 170), rgb(216, 216, 226)},
      rgb(20, 60, 140), rgb(120, 220, 160), rgb(26, 26, 36), rgb(16, 16, 24), 0, false, rgb(200, 220, 255)},
+    // 7 oil rig at sea: stormy dusk, rusty yellow steel, wet concrete
+    {rgb(16, 22, 38), rgb(92, 104, 124),
+     {rgb(48, 28, 16), rgb(100, 60, 28), rgb(158, 100, 40), rgb(210, 152, 62), rgb(252, 218, 132)},
+     {rgb(22, 28, 34), rgb(42, 52, 60), rgb(66, 80, 90), rgb(100, 116, 126), rgb(152, 170, 178)},
+     rgb(84, 90, 104), rgb(236, 238, 244), rgb(34, 56, 78), rgb(18, 36, 56), 0, false, rgb(130, 210, 240), 1, 1},
+    // 8 jungle: steamy green, mossy temple stone, red earth
+    {rgb(8, 30, 26), rgb(110, 158, 102),
+     {rgb(30, 36, 28), rgb(62, 72, 52), rgb(100, 112, 82), rgb(148, 158, 116), rgb(206, 212, 164)},
+     {rgb(40, 22, 12), rgb(76, 44, 22), rgb(116, 70, 36), rgb(160, 106, 56), rgb(206, 154, 92)},
+     rgb(160, 90, 40), rgb(255, 232, 160), rgb(26, 70, 42), rgb(12, 42, 26), 0, false, rgb(170, 255, 120), 2, 2},
+    // 9 crystal cave: no sky, purple rock, glowing crystals, rusty mine scaffolding
+    {rgb(8, 6, 14), rgb(26, 18, 36),
+     {rgb(34, 26, 22), rgb(70, 54, 40), rgb(112, 88, 62), rgb(160, 130, 92), rgb(214, 186, 140)},
+     {rgb(24, 18, 32), rgb(48, 38, 60), rgb(76, 62, 92), rgb(112, 96, 130), rgb(160, 144, 178)},
+     rgb(40, 30, 60), rgb(120, 255, 240), rgb(30, 22, 40), rgb(18, 12, 26), 0, false, rgb(90, 240, 230), 3, 3},
+    // 10 the void: derelict station by a black hole, gunmetal hull, asteroid rock
+    {rgb(2, 0, 8), rgb(20, 6, 40),
+     {rgb(20, 22, 30), rgb(44, 46, 58), rgb(76, 80, 96), rgb(118, 122, 140), rgb(180, 184, 202)},
+     {rgb(30, 24, 22), rgb(56, 46, 40), rgb(86, 72, 62), rgb(124, 106, 90), rgb(174, 154, 132)},
+     rgb(70, 16, 90), rgb(255, 160, 70), rgb(20, 8, 34), rgb(10, 4, 20), 0, false, rgb(200, 120, 255), 4, 0},
 };
 
 // ------------------------------------------------------------------ level data
-struct PlatDef { float x0, y0, x1, y1; int w; float period, phase; char pad; int sw; };
+struct PlatDef { float x0, y0, x1, y1; int w; float period, phase; char pad; int sw; int h = 1; };   // h > 1: a moving wall / elevator block (tiles)
+struct HoleDef { float x, y, pull, core; };   // black hole: centre (tiles), pull (px/s^2), deadly core radius (px)
 struct MineDef { float x0, y0, x1, y1, period, phase, r; };
 struct LevelDef {
     std::string name; int theme = 0; float gravity = 1; int quota = 5;
     std::vector<std::string> map; std::vector<PlatDef> plats; std::vector<MineDef> mines;
+    // levels 21-40
+    std::vector<HoleDef> holes;
+    std::vector<SDL_FPoint> air;     // mid-air spawn points (tile coords of the taxi centre)
+    int weather = 0;                 // 0 none, 1 rain + lightning, 2 snow, 3 drifting spores
+    float doorPeriod = 9.f;          // cycle of the slow automatic doors (Y / y)
+    float gunPeriod = 2.6f;          // average time between turret shots
+    std::string hint;                // shown on the level intro
+    float wind = 1.f;                // strength of the wind tiles (^ v < >) in this level
 };
 #include "levels.inc"
 static std::vector<LevelDef> LEVELDEFS;
@@ -391,9 +423,9 @@ static const char* MINE_SPR[9] = {
 
 // ------------------------------------------------------------------ runtime level
 struct PadE { int x, y, w; char id; int plat; };
-struct PlatE { PlatDef d; float t = 0; int x = 0, y = 0, w = 0; int dx = 0, dy = 0; float vx = 0, vy = 0; int pad = -1; };   // dx/dy: whole pixels moved this frame, vx/vy: exact px/s
+struct PlatE { PlatDef d; float t = 0; int x = 0, y = 0, w = 0, h = 8; int dx = 0, dy = 0; float vx = 0, vy = 0; int pad = -1; };   // dx/dy: whole pixels moved this frame, vx/vy: exact px/s
 struct MineE { MineDef d; float x = 0, y = 0; };
-struct Slot { int pad, x; };
+struct Slot { int pad, x, y = 0; };   // pad < 0: mid-air spawn point at x, y
 struct Particle { float x, y, vx, vy, life, max; uint32_t c; float g; int size; };
 struct FloatText { float x, y, life; std::string s; uint32_t c; };
 
@@ -421,6 +453,19 @@ struct Level {
     int delivered = 0;
     float time = 0;
     bool laserA = false, laserB = false;
+    // levels 21-40
+    std::vector<int> switchCh;                 // channel of each switch: 0 S (red/cyan), 1 Q (yellow/purple), 2 U (green/orange)
+    bool chOn[3] = {false, false, false};      // channel states (chOn[0] mirrors switchOn)
+    struct TDoor { int x, y, len; bool vert; float phase; int shut = 0; };   // slow automatic door: shut = closed px
+    std::vector<TDoor> tdoors;
+    struct Gun { int x, y; float nx, ny, aim, cd, warn; };            // turret tile px, wall normal, barrel angle
+    std::vector<Gun> guns;
+    struct Bullet { float x, y, vx, vy, life; };
+    std::vector<Bullet> bullets;
+    std::vector<SDL_Point> radars;             // dish centres (px)
+    std::vector<uint32_t> fg;                  // foreground layer (O tiles), 0 = transparent
+    bool hasFg = false, hasWater = false, hasZones = false;
+    float flashT = 0, boltT = 6;               // lightning
     char T(int x, int y) const { if (x < 0 || y < 0 || x >= MW || y >= MH) return '#'; return tile[y][x]; }
 };
 static Level LV;
@@ -441,6 +486,8 @@ struct Player {
     float invuln = 0, fuel = FUEL_MAX; int pass = -1; float tip = 0;
     float refuelAcc = 0, noFuelT = 0; bool noMoneyShown = false;
     float fuelSndT = 0, lowFuelT = 0, tpCd = 0, landedT = 0, airT = 9;
+    float hoverT = 0;     // > 0 after a mid-air spawn: the taxi hangs still until the player thrusts
+    float jam = 0;        // radar jamming strength at the taxi (0..1)
     bool thU = 0, thD = 0, thL = 0, thR = 0;
     bool pressed(bool Input::*b) const { return cur.*b && !(prev.*b); }
     float cx() const { return x + 8; }
@@ -471,6 +518,23 @@ static GState gstate = GS_TITLE;
 static float stateT = 0;
 static int curLevel = 0;
 static int startLevel_ = 0;
+// Level sets: 5 levels each (the last regular set takes the remainder, e.g. 36-41), plus one
+// "complete" set with every level. Picked on the title screen; finishing a set ends the game
+// with a congratulations screen that points to the next set.
+static const int NREGSETS = NLEVELS / 5;          // 8 regular sets
+static const int NSETS = NREGSETS + 1;            // + "LEVEL SET COMPLETE"
+static int selSet = 0;
+static void setRange(int set, int& first, int& last) {
+    if (set >= NREGSETS) { first = 0; last = NLEVELS - 1; return; }
+    first = set * 5; last = set == NREGSETS - 1 ? NLEVELS - 1 : first + 4;
+}
+static std::string setLabel(int set) {
+    int a, b; setRange(set, a, b);
+    char buf[64];
+    if (set >= NREGSETS) snprintf(buf, sizeof buf, "LEVEL SET COMPLETE (LEVELS %d-%d)", a + 1, b + 1);
+    else snprintf(buf, sizeof buf, "LEVEL SET %d (LEVELS %d-%d)", set + 1, a + 1, b + 1);
+    return buf;
+}
 static std::vector<Particle> parts;
 static std::vector<FloatText> ftexts;
 static float shakeT = 0;
@@ -591,8 +655,172 @@ static void genBackground(const Theme& th, uint32_t* out, int w, int h, int seed
     }
 }
 
+// Backgrounds of the four graphics sets of levels 21-40
+static void genBackground2(const Theme& th, uint32_t* out, int w, int h, int seed) {
+    Rng r(seed * 7919 + 23);
+    auto put = [&](int x, int y, uint32_t c) { if (x >= 0 && y >= 0 && x < w && y < h) out[y * w + x] = c; };
+    auto blend = [&](int x, int y, uint32_t c, float a) { if (x >= 0 && y >= 0 && x < w && y < h) out[y * w + x] = mix(out[y * w + x], c, a); };
+    auto sky = [&](float horizon) {
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                float t = std::min(1.f, (float)y / (h * horizon));
+                int lvl = std::clamp((int)std::floor(t * 10 + bayer(x, y) - 0.5f + 0.5f), 0, 10);
+                out[y * w + x] = mix(th.skyTop, th.skyBot, lvl / 10.f);
+            }
+    };
+    if (th.bg == 1) {   // ---- ocean: storm clouds, a moon, the sea and distant rigs
+        float hz = 0.6f;
+        sky(hz);
+        float mx = r.r(50, w - 50.f), my = r.r(20, 44), mr = r.r(9, 13);
+        for (int y = 0; y < h * hz; y++)
+            for (int x = 0; x < w; x++) {
+                float d = std::hypot(x - mx, y - my);
+                if (d < mr) { float v = vnoise(x * 0.3f, y * 0.3f, seed) * 0.25f; put(x, y, mix(th.planetA, th.planetB, 0.75f - v + (mx - x) / mr * 0.1f)); }
+                else if (d < mr * 3.5f && bayer(x, y) < (1 - d / (mr * 3.5f)) * 0.45f) blend(x, y, th.planetB, 0.2f);
+                float c = vnoise(x * 0.02f, y * 0.09f, seed + 4) * 0.7f + vnoise(x * 0.07f, y * 0.2f, seed + 5) * 0.3f;
+                if (c > 0.5f) {
+                    float a = std::clamp((c - 0.5f) * 3.f, 0.f, 1.f);
+                    int lvl = (int)(a * 3 + bayer(x, y));
+                    uint32_t cc = lvl >= 3 ? mix(th.skyBot, rgb(200, 205, 220), 0.35f) : lvl == 2 ? mix(th.skyTop, th.skyBot, 0.7f) : mix(th.skyTop, th.skyBot, 0.4f);
+                    if (lvl > 0) put(x, y, cc);
+                }
+            }
+        int H0 = (int)(h * hz);
+        for (int y = H0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                float t = (float)(y - H0) / (h - H0);
+                uint32_t c = mix(th.hillFar, th.hillNear, t);
+                float wv = vnoise(x * 0.09f / (0.3f + t), y * 0.9f, seed + 6);
+                if (wv > 0.72f - t * 0.1f) c = mix(c, th.accent, 0.35f - t * 0.15f);
+                else if (wv < 0.22f) c = shade(c, 0.85f);
+                if (y == H0) c = mix(th.skyBot, th.accent, 0.3f);
+                put(x, y, c);
+            }
+        // distant rigs on the horizon with flare stacks
+        for (int k = 0; k < 3; k++) {
+            int rx = (int)(w * (0.15f + k * 0.33f) + r.r(-20, 20)), rw = 22 + r.i(16), base = H0 + 1, top = base - 14 - r.i(8);
+            uint32_t sil = shade(th.hillNear, 0.7f);
+            for (int y = top; y < base; y++) for (int x = rx; x < rx + rw; x++) if (y > top + 4 || (x - rx) % 6 < 2) put(x, y, sil);
+            for (int x = rx; x < rx + rw; x += 5) for (int y = base; y < base + 6; y++) put(x, y, sil);
+            int dx = rx + rw - 6;
+            for (int y = top - 16; y < top; y++) { int half = (y - (top - 16)) / 4; for (int x = dx - half; x <= dx + half; x++) if (x == dx - half || x == dx + half || (y & 3) == 0) put(x, y, sil); }
+            for (int f = 0; f < 6; f++) blend(rx + 2 + (f & 1), top - 3 - f, rgb(255, 180 - f * 15, 60), 0.9f - f * 0.1f);
+            blend(rx + 2, top - 9, rgb(255, 140, 40), 0.3f);
+        }
+    } else if (th.bg == 2) {   // ---- jungle: hazy sun, layered tree canopies, hanging vines, light shafts
+        sky(0.85f);
+        float sx = r.r(60, w - 60.f), sy = r.r(26, 50);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                float d = std::hypot(x - sx, y - sy);
+                if (d < 12) put(x, y, mix(th.planetB, rgb(255, 255, 230), 0.5f));
+                else if (d < 40 && bayer(x, y) < (1 - d / 40) * 0.6f) blend(x, y, th.planetB, 0.35f);
+            }
+        for (int layer = 0; layer < 3; layer++) {
+            uint32_t col = layer == 0 ? mix(th.hillFar, th.skyBot, 0.45f) : layer == 1 ? th.hillFar : th.hillNear;
+            float base = h * (0.52f + layer * 0.14f);
+            for (int x = 0; x < w; x++) {
+                float bump = 0;
+                for (int k = 0; k < 3; k++) bump += std::fabs(std::sin(x * (0.05f + k * 0.031f) + seed * (k + 1) + layer * 2.1f)) * (9 - k * 2);
+                int top = (int)(base - bump - vnoise(x * 0.2f, layer * 7.f, seed) * 6);
+                for (int y = std::max(0, top); y < h; y++) {
+                    uint32_t c = col;
+                    if (y - top < 2) c = mix(col, th.accent, layer == 2 ? 0.25f : 0.15f);
+                    else if (h01(x / 2, y / 2, seed + layer) < 0.12f) c = mix(col, th.accent, 0.12f);
+                    put(x, y, c);
+                }
+                // trunks under the far canopies
+                if (layer < 2 && (int)(h01(x / 3, layer, seed + 7) * 100) < 4)
+                    for (int y = top; y < h; y++) blend(x, y, shade(col, 0.6f), 0.7f);
+            }
+        }
+        // light shafts
+        for (int k = 0; k < 4; k++) {
+            float x0 = r.r(0, w), wd = r.r(6, 14);
+            for (int y = 0; y < h; y++) for (int x = (int)(x0 + y * 0.45f); x < x0 + y * 0.45f + wd; x++) if (bayer(x, y) < 0.3f) blend(x, y, th.planetB, 0.12f);
+        }
+        // hanging vines
+        for (int k = 0; k < 14; k++) {
+            int vx = r.i(w), len = 20 + r.i(60); float ph = r.r(0, 6);
+            for (int y = 0; y < len; y++) {
+                int x = vx + (int)std::lround(std::sin(y * 0.15f + ph) * 1.5f);
+                put(x, y, th.hillNear);
+                if (y % 5 == 2) { put(x - 1, y, mix(th.hillNear, th.accent, 0.3f)); put(x + 1, y + 1, mix(th.hillNear, th.accent, 0.2f)); }
+            }
+        }
+    } else if (th.bg == 3) {   // ---- cave: rock wall, stalactites, glowing crystals
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                float n = vnoise(x * 0.06f, y * 0.06f, seed) * 0.6f + vnoise(x * 0.18f, y * 0.18f, seed + 1) * 0.4f;
+                float depth = 0.5f + 0.5f * std::sin(x * 0.01f + seed);
+                int lvl = std::clamp((int)std::floor(n * 4 + bayer(x, y) - 0.8f), 0, 3);
+                uint32_t c = lvl == 0 ? th.skyTop : lvl == 1 ? th.skyBot : lvl == 2 ? th.hillFar : mix(th.hillFar, th.rock[1], 0.4f);
+                float cr = vnoise(x * 0.09f, y * 0.09f, seed + 3);
+                if (std::fabs(cr - 0.5f) < 0.02f) c = th.skyTop;
+                put(x, y, mix(c, th.skyTop, 0.3f * depth));
+            }
+        // stalactites and stalagmites
+        for (int k = 0; k < 26; k++) {
+            int cx = r.i(w), len = 8 + r.i(30), wd = 3 + r.i(5);
+            bool up = k % 3 == 2;
+            for (int j = 0; j < len; j++) {
+                int half = (int)(wd * (1 - (float)j / len));
+                int y = up ? h - 1 - j : j;
+                for (int x = cx - half; x <= cx + half; x++) put(x, y, x == cx - half ? th.rock[2] : (x == cx + half ? th.hillNear : th.hillFar));
+            }
+        }
+        // crystals with a soft glow
+        for (int k = 0; k < 16; k++) {
+            int cx = r.i(w), cy = r.i(h); uint32_t cc = k % 3 ? th.accent : th.planetB;
+            if (k % 4 == 0) cc = rgb(220, 120, 255);
+            for (int y = -14; y <= 14; y++) for (int x = -14; x <= 14; x++) { float d = std::hypot((float)x, (float)y); if (d < 14 && bayer(cx + x, cy + y) < (1 - d / 14) * 0.5f) blend(cx + x, cy + y, cc, 0.25f); }
+            int n = 2 + r.i(3);
+            for (int c = 0; c < n; c++) {
+                int len = 3 + r.i(6), dx = r.i(5) - 2;
+                for (int j = 0; j < len; j++) { put(cx + dx * j / len, cy - j, mix(cc, rgb(255, 255, 255), j == len - 1 ? 0.7f : 0.15f)); put(cx + dx * j / len + 1, cy - j, shade(cc, 0.6f)); }
+            }
+        }
+    } else {   // ---- void: deep space, nebula swirl, a spiral galaxy, asteroids
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                float t = (float)y / (h - 1);
+                int lvl = std::clamp((int)std::floor(t * 8 + bayer(x, y) - 0.5f), 0, 8);
+                uint32_t c = mix(th.skyTop, th.skyBot, lvl / 8.f);
+                float cx = w * 0.5f, cy = h * 0.45f, dx = x - cx, dy = (y - cy) * 1.4f, d = std::hypot(dx, dy), a = std::atan2(dy, dx);
+                float sw = vnoise(std::cos(a + d * 0.025f) * 3 + 5, std::sin(a + d * 0.025f) * 3 + 5, seed) * (1 - std::min(1.f, d / (w * 0.6f)));
+                if (sw > 0.25f) { float v = (sw - 0.25f) * 2.2f; c = mix(c, v > 0.5f ? th.planetB : th.accent, std::min(0.45f, v * 0.6f) * (bayer(x, y) < 0.7f ? 1 : 0.6f)); }
+                out[y * w + x] = c;
+            }
+        for (int i = 0; i < 220; i++) {
+            int x = r.i(w), y = r.i(h); float b = r.f();
+            blend(x, y, i % 6 == 0 ? rgb(255, 210, 170) : rgb(230, 230, 255), 0.3f + 0.7f * b);
+        }
+        // distant spiral galaxy
+        float gx = r.r(30, w - 30.f), gy = r.r(14, 50);
+        for (int k = 0; k < 500; k++) {
+            float t = r.f(), arm = (k & 1) * 3.14159f, ang = arm + t * 7.f, rad = t * 16;
+            int x = (int)(gx + std::cos(ang) * rad + r.r(-1, 1)), y = (int)(gy + std::sin(ang) * rad * 0.45f + r.r(-1, 1));
+            blend(x, y, mix(rgb(255, 230, 200), th.accent, t), 0.5f * (1 - t * 0.6f));
+        }
+        // drifting asteroids near the bottom
+        for (int k = 0; k < 7; k++) {
+            float ax = r.r(0, w), ay = r.r(h * 0.55f, h * 0.95f), ar = r.r(4, 12);
+            for (int y = (int)(ay - ar); y <= ay + ar; y++)
+                for (int x = (int)(ax - ar * 1.4f); x <= ax + ar * 1.4f; x++) {
+                    float nx = (x - ax) / (ar * 1.4f), ny = (y - ay) / ar, d = nx * nx + ny * ny + (vnoise(x * 0.3f, y * 0.3f, seed + k) - 0.5f) * 0.5f;
+                    if (d > 1) continue;
+                    uint32_t c = th.hillNear;
+                    if (nx + ny < -0.6f && d > 0.4f) c = mix(th.hillNear, th.planetB, 0.35f);
+                    put(x, y, c);
+                }
+        }
+    }
+}
+
 // ------------------------------------------------------------------ static tiles
 static bool isWall(char c) { return c == '#' || c == '%'; }
+static bool isZoneC(char c) { return c == 'n' || c == 'c'; }    // thrust-dead / cloaking fields (not solid)
+static char zoneAt(int tx, int ty) { return LV.T(tx, ty); }
 static bool isPadC(char c) { return (c >= '1' && c <= '9') || c == 'F'; }
 
 static inline void putS(int x, int y, uint32_t c, bool solid, bool hz = false) {
@@ -736,12 +964,119 @@ static void paintSpikes(int tx, int ty) {
             }
 }
 
+// gun turret (Z): an armoured block with a dome on the open side; the barrel is drawn live
+static void gunNormal(int tx, int ty, float& nx, float& ny) {
+    nx = 0; ny = -1;
+    const int D[4][2] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
+    for (auto& d : D) {
+        char c = LV.T(tx + d[0], ty + d[1]);
+        if (!isWall(c) && c != 'Z' && c != '=' && !isPadC(c)) { nx = (float)d[0]; ny = (float)d[1]; return; }
+    }
+}
+static void paintGun(int tx, int ty) {
+    const uint32_t* m = LV.th->metal;
+    float nx, ny; gunNormal(tx, ty, nx, ny);
+    for (int py = 0; py < 8; py++)
+        for (int px = 0; px < 8; px++) {
+            float dx = px - 3.5f - nx * 1.5f, dy = py - 3.5f - ny * 1.5f, d = std::hypot(dx, dy);
+            uint32_t c = (px == 0 || py == 0) ? m[3] : (px == 7 || py == 7) ? m[0] : m[1];
+            if ((px == 1 || px == 6) && (py == 1 || py == 6)) c = m[4];
+            if (d < 3.2f) c = (dx + dy < -1.5f) ? rgb(255, 150, 140) : (dx + dy < 1.f ? rgb(190, 50, 50) : rgb(110, 20, 30));
+            putS(tx * 8 + px, ty * 8 + py, c, true);
+        }
+}
+// radar dish (2x2 block of R): solid exactly where the dish is drawn
+static const char* RADAR_SPR[16] = {
+    "................", ".......ff.......", "A......kk......A", "Ab.....kk.....bA",
+    ".Abb...kk...bbA.", "..AAbbbkkbbbAA..", "....AAAAAAAA....", ".......PP.......",
+    ".......PP.......", "......pPPp......", ".......PP.......", ".......PP.......",
+    "......pPPp......", ".....BBBBBB.....", "....BBBBBBBB....", "...BBBBBBBBBB...",
+};
+static void paintRadar(int x0, int y0) {
+    const uint32_t* m = LV.th->metal;
+    for (int y = 0; y < 16; y++)
+        for (int x = 0; x < 16; x++) {
+            char ch = RADAR_SPR[y][x];
+            uint32_t c;
+            switch (ch) {
+                case 'A': c = rgb(230, 236, 246); break; case 'b': c = rgb(150, 160, 180); break;
+                case 'k': c = m[1]; break; case 'f': c = rgb(200, 40, 40); break;
+                case 'P': c = m[3]; break; case 'p': c = m[1]; break;
+                case 'B': c = y == 13 ? m[4] : (y == 15 ? m[1] : m[2]); break;
+                default: continue;
+            }
+            putS(x0 + x, y0 + y, c, true);
+        }
+}
+// foreground (O): drawn over the taxis. Jungle: leaves; elsewhere dark structure with lit rims (window frames)
+static void paintFg(int tx, int ty) {
+    const Theme& th = *LV.th;
+    int seed = LV.idx * 13 + 1;
+    bool N = LV.T(tx, ty - 1) != 'O', S = LV.T(tx, ty + 1) != 'O', W = LV.T(tx - 1, ty) != 'O', E = LV.T(tx + 1, ty) != 'O';
+    for (int py = 0; py < 8; py++)
+        for (int px = 0; px < 8; px++) {
+            int gx = tx * 8 + px, gy = ty * 8 + py;
+            bool edge = (N && py == 0) || (S && py == 7) || (W && px == 0) || (E && px == 7);
+            uint32_t c;
+            if (th.deco == 2) {   // foliage: leafy clumps with ragged, rounded outer edges
+                float n = vnoise(gx * 0.32f, gy * 0.32f, seed) * 0.6f + vnoise(gx * 0.9f, gy * 0.9f, seed + 1) * 0.4f;
+                int de = 8;
+                if (N) de = std::min(de, py); if (S) de = std::min(de, 7 - py); if (W) de = std::min(de, px); if (E) de = std::min(de, 7 - px);
+                if ((N && W) || (N && E) || (S && W) || (S && E)) {   // round off outer corners
+                    int cx = W ? 0 : 7, cy = N ? 0 : 7;
+                    if (std::hypot((float)(px - (W ? 7 : 0)), (float)(py - (N ? 7 : 0))) > 7.5f + vnoise(gx * 0.5f, gy * 0.5f, seed + 3) * 1.5f) continue;
+                    (void)cx; (void)cy;
+                }
+                if (de < 5 && vnoise(gx * 0.3f, gy * 0.3f, seed + 2) * 6.f > de + 1.2f) continue;
+                int lvl = std::clamp((int)std::floor(n * 4.5f + bayer(gx, gy) - 0.9f), 0, 4);
+                const uint32_t G[5] = {rgb(10, 34, 18), rgb(20, 62, 28), rgb(40, 100, 36), rgb(84, 150, 52), rgb(160, 210, 90)};
+                c = G[lvl];
+                if ((N && py <= 1) || (W && px <= 1)) c = mix(c, G[4], 0.35f);
+            } else {
+                const uint32_t* pal = th.deco == 3 ? th.rock : th.metal;
+                float n = vnoise(gx * 0.25f, gy * 0.25f, seed);
+                c = shade(pal[1], 0.55f + n * 0.25f);
+                if (th.deco != 3 && (gx & 7) == 0) c = shade(pal[0], 0.6f);         // panel seams
+                if (th.deco != 3 && ((gx + 3) & 15) == 0 && (gy & 7) == 3) c = pal[2];   // rivets
+                if (th.deco == 1 && h01(gx, gy / 3, seed) < 0.08f) c = mix(c, rgb(140, 70, 30), 0.5f);   // rust
+                if (edge) c = (N && py == 0) || (W && px == 0) ? pal[3] : pal[0];
+            }
+            LV.fg[gy * WW + gx] = c;
+        }
+}
+// theme decoration on solid wall tiles (colours only, never changes the solid shape)
+static void decoTile(int tx, int ty) {
+    const Theme& th = *LV.th;
+    int seed = LV.idx * 17 + 3;
+    bool N = !isWall(LV.T(tx, ty - 1)) && !isPadC(LV.T(tx, ty - 1)), S = !isWall(LV.T(tx, ty + 1));
+    for (int py = 0; py < 8; py++)
+        for (int px = 0; px < 8; px++) {
+            int gx = tx * 8 + px, gy = ty * 8 + py, i = gy * WW + gx;
+            if (!LV.sSolid[i]) continue;
+            uint32_t& c = LV.img[i];
+            if (th.deco == 1) {        // rust streaks running down from seams
+                float st = h01(gx, 0, seed);
+                if (st < 0.12f && h01(gx, gy / 4, seed + 1) < 0.7f) c = mix(c, rgb(130, 56, 22), 0.45f);
+            } else if (th.deco == 2) { // grass on top, moss drips below
+                if (N && py < 2) c = py == 0 ? rgb(150, 220, 80) : rgb(70, 150, 50);
+                else if (N && py == 2 && h01(gx, gy, seed) < 0.6f) c = rgb(40, 100, 36);
+                if (S && py >= 6 && h01(gx, 0, seed + 2) < 0.4f) c = mix(c, rgb(40, 110, 40), py == 7 ? 0.7f : 0.4f);
+                else if (h01(gx / 2, gy / 2, seed + 4) < 0.08f) c = mix(c, rgb(60, 120, 40), 0.5f);
+            } else if (th.deco == 3) { // crystals growing out of the rock tops
+                if (N && py < 4 && h01(tx, ty, seed) < 0.3f) {
+                    int cx = 2 + (int)(h01(tx, ty, seed + 1) * 4);
+                    if (std::abs(px - cx) <= (py + 1) / 2) c = mix(th.accent, rgb(255, 255, 255), px < cx ? 0.5f : 0.f);
+                }
+            }
+        }
+}
+
 static void buildLevel(int idx) {
     Level& L = LV;
     L = Level();
     L.idx = idx;
     L.def = &LEVELDEFS[idx];
-    L.th = &THEMES[L.def->theme % 7];
+    L.th = &THEMES[L.def->theme % NTHEMES];
     L.img.assign(WW * WH, 0);
     L.sSolid.assign(WW * WH, 0); L.sHaz.assign(WW * WH, 0);
     L.solid.assign(WW * WH, 0); L.haz.assign(WW * WH, 0);
@@ -750,7 +1085,28 @@ static void buildLevel(int idx) {
             L.tile[y][x] = L.def->map[y][x];
             L.windX[y][x] = L.windY[y][x] = 0;
         }
-    genBackground(*L.th, L.img.data(), WW, WH, idx + 1);
+    if (L.th->bg) genBackground2(*L.th, L.img.data(), WW, WH, idx + 1);
+    else genBackground(*L.th, L.img.data(), WW, WH, idx + 1);
+    // black holes: the background bends and darkens around them; the core is deadly
+    for (auto& hd : L.def->holes) {
+        float hx = hd.x * 8, hy = hd.y * 8, R = hd.core * 4.5f;
+        std::vector<uint32_t> src = L.img;
+        for (int y = std::max(0, (int)(hy - R)); y < std::min(WH, (int)(hy + R)); y++)
+            for (int x = std::max(0, (int)(hx - R)); x < std::min(WW, (int)(hx + R)); x++) {
+                float dx = x - hx, dy = y - hy, d = std::hypot(dx, dy);
+                if (d >= R || d < 0.5f) continue;
+                float t = d / R, tw = (1 - t) * (1 - t) * 2.2f;           // swirl the sky around the hole
+                float a = std::atan2(dy, dx) + tw, sd = d * (0.55f + 0.45f * t);
+                int sx = std::clamp((int)(hx + std::cos(a) * sd * 1.6f), 0, WW - 1), sy = std::clamp((int)(hy + std::sin(a) * sd * 1.6f), 0, WH - 1);
+                uint32_t c = shade(src[sy * WW + sx], 0.35f + 0.65f * t);
+                L.img[y * WW + x] = c;
+            }
+        for (int y = (int)(hy - hd.core - 1); y <= hy + hd.core + 1; y++)
+            for (int x = (int)(hx - hd.core - 1); x <= hx + hd.core + 1; x++)
+                if (std::hypot(x + 0.5f - hx, y + 0.5f - hy) < hd.core && x >= 0 && y >= 0 && x < WW && y < WH) {
+                    L.img[y * WW + x] = rgb(0, 0, 0); L.sHaz[y * WW + x] = 1;
+                }
+    }
 
     int tpAx0 = 99, tpAy0 = 99, tpAx1 = -1, tpAy1 = -1, tpBx0 = 99, tpBy0 = 99, tpBx1 = -1, tpBy1 = -1;
     for (int y = 0; y < MH; y++)
@@ -763,11 +1119,19 @@ static void buildLevel(int idx) {
                 case '|': paintPipe(x, y, true); break;
                 case '-': paintPipe(x, y, false); break;
                 case 'X': paintSpikes(x, y); break;
-                case 'S': L.switches.push_back({x * 8, y * 8}); break;
-                case '^': L.windY[y][x] = -95; break;
-                case 'v': L.windY[y][x] = 60; break;
-                case '<': L.windX[y][x] = -70; break;
-                case '>': L.windX[y][x] = 70; break;
+                case 'S': L.switches.push_back({x * 8, y * 8}); L.switchCh.push_back(0); break;
+                case 'Q': L.switches.push_back({x * 8, y * 8}); L.switchCh.push_back(1); break;
+                case 'U': L.switches.push_back({x * 8, y * 8}); L.switchCh.push_back(2); break;
+                case 'Z': { paintGun(x, y); Level::Gun g{x * 8, y * 8, 0, 0, 0, 0, 0}; gunNormal(x, y, g.nx, g.ny);
+                            g.aim = std::atan2(g.ny, g.nx); g.cd = L.def->gunPeriod * (0.6f + h01(x, y, 5)); L.guns.push_back(g); break; }
+                case 'R': if (L.T(x - 1, y) != 'R' && L.T(x, y - 1) != 'R') { paintRadar(x * 8, y * 8); L.radars.push_back({x * 8 + 8, y * 8 + 4}); } break;
+                case 'O': if (!L.hasFg) { L.fg.assign(WW * WH, 0); L.hasFg = true; } paintFg(x, y); break;
+                case '~': L.hasWater = true; break;
+                case 'n': case 'c': L.hasZones = true; break;
+                case '^': L.windY[y][x] = -95 * L.def->wind; break;
+                case 'v': L.windY[y][x] = 60 * L.def->wind; break;
+                case '<': L.windX[y][x] = -70 * L.def->wind; break;
+                case '>': L.windX[y][x] = 70 * L.def->wind; break;
                 case 'T': tpAx0 = std::min(tpAx0, x); tpAy0 = std::min(tpAy0, y); tpAx1 = std::max(tpAx1, x); tpAy1 = std::max(tpAy1, y); break;
                 case 't': tpBx0 = std::min(tpBx0, x); tpBy0 = std::min(tpBy0, y); tpBx1 = std::max(tpBx1, x); tpBy1 = std::max(tpBy1, y); break;
                 default: break;
@@ -777,6 +1141,22 @@ static void buildLevel(int idx) {
         L.hasTp = true;
         L.tpA = {tpAx0 * 8, tpAy0 * 8, (tpAx1 - tpAx0 + 1) * 8, (tpAy1 - tpAy0 + 1) * 8};
         L.tpB = {tpBx0 * 8, tpBy0 * 8, (tpBx1 - tpBx0 + 1) * 8, (tpBy1 - tpBy0 + 1) * 8};
+    }
+    // theme decorations on the walls (moss, rust, crystals)
+    if (L.th->deco)
+        for (int y = 0; y < MH; y++) for (int x = 0; x < MW; x++) if (isWall(L.tile[y][x])) decoTile(x, y);
+    // slow automatic doors: runs of Y (phase 0) / y (phase 1/2); vertical runs slide up, horizontal ones left
+    {
+        bool used[MH][MW] = {};
+        for (int y = 0; y < MH; y++)
+            for (int x = 0; x < MW; x++) {
+                char c = L.tile[y][x];
+                if ((c != 'Y' && c != 'y') || used[y][x]) continue;
+                bool vert = L.T(x, y + 1) == c;
+                int n = 0;
+                while (L.T(x + (vert ? 0 : n), y + (vert ? n : 0)) == c) { used[y + (vert ? n : 0)][x + (vert ? 0 : n)] = true; n++; }
+                L.tdoors.push_back({x * 8, y * 8, n * 8, vert, c == 'Y' ? 0.f : 0.5f, n * 8});
+            }
     }
     // switches are pressure plates on the floor: not solid, drawn dynamically (see drawWorld)
     // static pads
@@ -805,9 +1185,11 @@ static void buildLevel(int idx) {
         int sp = p.w / n;
         for (int i = 0; i < n; i++) L.slots.push_back({pi, p.x + sp * i + (sp - 16) / 2});
     }
+    // mid-air spawn points (levels with fewer pads than players)
+    for (auto& a : L.def->air) L.slots.push_back({-1, (int)std::lround(a.x * 8 - 8), (int)std::lround(a.y * 8 - 5)});
     // platforms & their pads
     for (auto& d : L.def->plats) {
-        PlatE pe; pe.d = d; pe.w = d.w * 8;
+        PlatE pe; pe.d = d; pe.w = d.w * 8; pe.h = d.h * 8;
         float u = 0.5f - 0.5f * std::cos(2 * 3.14159265f * d.phase);
         pe.x = (int)std::lround((d.x0 + (d.x1 - d.x0) * u) * 8);
         pe.y = (int)std::lround((d.y0 + (d.y1 - d.y0) * u) * 8);
@@ -822,7 +1204,30 @@ static void buildLevel(int idx) {
 }
 
 // ------------------------------------------------------------------ dynamic masks
-static inline bool doorSolid(char c, const Level& L) { return (c == 'D' && !L.switchOn) || (c == 'E' && L.switchOn); }
+static inline bool chanOn(const Level& L, int ch) { return ch == 0 ? L.switchOn : L.chOn[ch]; }
+// D/E: switch channel 0 (S), J/j: channel 1 (Q), K/k: channel 2 (U). Upper case is closed while the channel is OFF.
+static inline bool doorSolid(char c, const Level& L) {
+    switch (c) {
+        case 'D': return !L.switchOn;  case 'E': return L.switchOn;
+        case 'J': return !L.chOn[1];   case 'j': return L.chOn[1];
+        case 'K': return !L.chOn[2];   case 'k': return L.chOn[2];
+        default: return false;
+    }
+}
+static inline bool isDoorC(char c) { return c == 'D' || c == 'E' || c == 'J' || c == 'j' || c == 'K' || c == 'k'; }
+// water surface: how many pixels down from the top of a surface water tile the water starts (1..3)
+static inline int waterTop(int x, float t) {
+    return 1 + std::clamp((int)std::lround((std::sin(x * 0.4f + t * 3.f) + std::sin(x * 0.13f - t * 1.7f)) * 0.55f + 1.f), 0, 2);
+}
+// slow automatic doors: 0 = closed .. 1 = open over one cycle (closed, opening, open, closing)
+static float tdoorOpen(float t, float phase, float period) {
+    float u = std::fmod(t / period + phase, 1.f);
+    auto ss = [](float v) { return v * v * (3 - 2 * v); };
+    if (u < 0.35f) return 0.f;
+    if (u < 0.5f) return ss((u - 0.35f) / 0.15f);
+    if (u < 0.85f) return 1.f;
+    return 1.f - ss((u - 0.85f) / 0.15f);
+}
 
 static void rebuildMasks() {
     Level& L = LV;
@@ -852,8 +1257,26 @@ static void rebuildMasks() {
                     }
             }
         }
+    // slow automatic doors
+    for (auto& d : L.tdoors)
+        for (int a = 0; a < d.shut; a++)
+            for (int b = 0; b < 8; b++) {
+                int x = d.vert ? d.x + b : d.x + a, y = d.vert ? d.y + a : d.y + b;
+                L.solid[y * WW + x] = 1;
+            }
+    // water: deadly below the animated surface
+    if (L.hasWater)
+        for (int ty = 0; ty < MH; ty++)
+            for (int tx = 0; tx < MW; tx++) {
+                if (L.tile[ty][tx] != '~') continue;
+                bool surf = L.T(tx, ty - 1) != '~';
+                for (int px = 0; px < 8; px++) {
+                    int top = surf ? waterTop(tx * 8 + px, L.time) : 0;
+                    for (int py = top; py < 8; py++) L.haz[(ty * 8 + py) * WW + tx * 8 + px] = 1;
+                }
+            }
     for (auto& p : L.plats)
-        for (int py = 0; py < 8; py++)
+        for (int py = 0; py < p.h; py++)
             for (int px = 0; px < p.w; px++) {
                 int x = p.x + px, y = p.y + py;
                 if (x >= 0 && y >= 0 && x < WW && y < WH) L.solid[y * WW + x] = 1;
@@ -957,6 +1380,13 @@ static void killPlayer(int i, const char* why) {
 }
 
 static void placeOnSlot(Player& p, const Slot& s) {
+    if (s.pad < 0) {   // mid-air spawn: gear up, hanging still until the player thrusts
+        p.x = (float)s.x; p.y = (float)s.y;
+        p.vx = p.vy = 0; p.gear = false; p.gearExt = 0; p.landed = false; p.landPad = p.landPlat = -1;
+        p.alive = true; p.pass = -1; p.tpCd = 0; p.landedT = 0; p.noFuelT = 0; p.airT = 9; p.hoverT = 3.f;
+        p.face = p.x + 8 < WW / 2 ? 0 : 1;
+        return;
+    }
     PadE& pad = LV.pads[s.pad];
     p.x = (float)s.x; p.y = (float)(pad.y - 10);
     p.vx = p.vy = 0; p.gear = true; p.gearExt = 2; p.landed = true; p.landPad = s.pad; p.landPlat = -1;
@@ -965,8 +1395,7 @@ static void placeOnSlot(Player& p, const Slot& s) {
 }
 
 static bool slotFree(const Slot& s, int self) {
-    PadE& pad = LV.pads[s.pad];
-    float sx = s.x + 8.f, sy = pad.y - 5.f;
+    float sx = s.x + 8.f, sy = s.pad < 0 ? s.y + 5.f : LV.pads[s.pad].y - 5.f;
     for (int j = 0; j < MAXP; j++) {
         if (j == self || !P[j].joined || !P[j].alive) continue;
         if (std::fabs(P[j].cx() - sx) < 26 && std::fabs(P[j].cy() - sy) < 22) return false;
@@ -978,16 +1407,18 @@ static void respawn(int i) {
     for (int k = 0; k < (int)LV.slots.size(); k++) {
         const Slot& s = LV.slots[k];
         if (!slotFree(s, i)) continue;
-        float sx = s.x + 8.f, sy = LV.pads[s.pad].y - 5.f;
+        int py = s.pad < 0 ? s.y + 10 : LV.pads[s.pad].y;    // bottom of the taxi there
+        float sx = s.x + 8.f, sy = py - 5.f;
         float md = 1e9f;
         for (int j = 0; j < MAXP; j++)
             if (j != i && P[j].joined && P[j].alive) md = std::min(md, std::hypot(P[j].cx() - sx, P[j].cy() - sy));
         // avoid hazards near the slot
         bool hz = false;
-        for (int yy = LV.pads[s.pad].y - 14; yy < LV.pads[s.pad].y && !hz; yy++)
+        for (int yy = py - 14; yy < py + (s.pad < 0 ? 6 : 0) && !hz; yy++)
             for (int xx = s.x - 2; xx < s.x + 18; xx++)
                 if (xx >= 0 && yy >= 0 && xx < WW && yy < WH && LV.haz[yy * WW + xx]) { hz = true; break; }
         if (hz) md *= 0.1f;
+        if (s.pad < 0) md *= 0.6f;     // prefer pads over mid-air spawns
         md += rng.f();
         if (md > best) { best = md; bi = k; }
     }
@@ -1124,7 +1555,9 @@ static void onLanded(int i) {
     // floor switches
     for (auto& s : LV.switches) {
         if (switchPressedBy(p, s) && LV.switchCd <= 0) {
-            LV.switchOn = !LV.switchOn; LV.switchCd = 0.6f;
+            int ch = LV.switchCh[&s - &LV.switches[0]];
+            if (ch == 0) LV.switchOn = !LV.switchOn; else LV.chOn[ch] = !LV.chOn[ch];
+            LV.chOn[0] = LV.switchOn; LV.switchCd = 0.6f;
             audio.play(SFX_SWITCH, 0.8f, panOf(p.cx()));
             audio.play(SFX_DOOR, 0.6f, 0);
             addText(s.x + 4.f, s.y - 6.f, "CLICK", rgb(255, 255, 255));
@@ -1162,9 +1595,30 @@ static bool canExit(const Player& p) {
     return LV.gateAnim >= 1.f && ((p.pass >= 0 && PASS[p.pass].up) || LV.upDone);
 }
 
+// radar jamming at a point: 1 right at a dish, 0 beyond JAM_R
+static const float JAM_R = 72.f;
+static float jamAt(float x, float y) {
+    float j = 0;
+    for (auto& r : LV.radars) j = std::max(j, 1.f - std::hypot(x - r.x, y - r.y) / JAM_R);
+    return j;
+}
+static bool inZone(float x, float y, char z) { return LV.T((int)std::floor(x / 8), (int)std::floor(y / 8)) == z; }
+
 static void updateTaxi(int i, float dt) {
     Player& p = P[i];
-    const Input& in = p.cur;
+    Input in = p.cur;
+    // radar dishes jam the controls: thrusters stutter and fire on their own
+    p.jam = LV.radars.empty() ? 0.f : jamAt(p.cx(), p.cy());
+    if (p.jam > 0 && !p.landed && rng.f() < p.jam * 0.45f) {    // only in flight: a parked taxi stays parked
+        in.u = rng.f() < 0.5f; in.d = rng.f() < 0.15f; in.l = rng.f() < 0.3f; in.r = rng.f() < 0.3f;
+        if (rng.f() < 0.02f) audio.play(SFX_JAM, 0.35f * p.jam + 0.1f, panOf(p.cx()));
+    }
+    // mid-air spawn: hang still until the player thrusts (or after a few seconds)
+    if (p.hoverT > 0) {
+        p.hoverT -= dt;
+        if (in.u || in.d || in.l || in.r || in.a || in.b) p.hoverT = 0;
+        else { p.vx = p.vy = 0; p.thU = p.thD = p.thL = p.thR = false; audio.thrust(i, 0, 0); if (p.invuln > 0) p.invuln -= dt; return; }
+    }
     if (p.invuln > 0) p.invuln -= dt;
     if (p.roughT > 0) p.roughT -= dt;
     if (p.tpCd > 0) p.tpCd -= dt;
@@ -1180,6 +1634,10 @@ static void updateTaxi(int i, float dt) {
     p.gearExt = std::clamp(p.gearExt, 0.f, 2.f);
 
     bool hasFuel = p.fuel > 0;
+    if (LV.hasZones && inZone(p.cx(), p.cy(), 'n')) {   // thrust-dead field: engines cut out
+        if ((in.u || in.d || in.l || in.r) && rng.f() < 0.3f) addPart(p.cx() + rng.r(-6, 6), p.y + 8, rng.r(-20, 20), rng.r(-20, 5), 0.2f, rgb(140, 200, 255), 0);
+        hasFuel = false;
+    }
     p.thU = in.u && hasFuel; p.thD = in.d && hasFuel && !p.landed; p.thL = in.l && hasFuel && !p.landed && !p.gear; p.thR = in.r && hasFuel && !p.landed && !p.gear;
     // as in the original: no sideways thrust while the landing gear is down (or extending),
     // so lining up for a landing has to be done before lowering the gear
@@ -1242,6 +1700,12 @@ static void updateTaxi(int i, float dt) {
     float side = THRUST_SIDE;
     float ax = ((p.thR ? 1 : 0) - (p.thL ? 1 : 0)) * side + LV.windX[ty][tx];
     float ay = g - (p.thU ? THRUST_UP : 0) + (p.thD ? THRUST_DOWN : 0) + LV.windY[ty][tx];
+    // black holes pull everything towards their centre
+    for (auto& hd : LV.def->holes) {
+        float dx = hd.x * 8 - p.cx(), dy = hd.y * 8 - p.cy(), d = std::max(4.f, std::hypot(dx, dy));
+        float a = hd.pull / (1.f + (d / 56.f) * (d / 56.f));
+        ax += a * dx / d; ay += a * dy / d;
+    }
     p.vx += ax * dt; p.vy += ay * dt;
     p.vx -= p.vx * (p.gear ? 0.55f : 0.35f) * dt;
     p.vy -= p.vy * 0.08f * dt;
@@ -1460,6 +1924,84 @@ static void updateWorld(float dt) {
         p.vx = (p.d.x1 - p.d.x0) * 8 * du; p.vy = (p.d.y1 - p.d.y0) * 8 * du;
         if (p.pad >= 0) { L.pads[p.pad].x = p.x; L.pads[p.pad].y = p.y; }
     }
+    // slow automatic doors
+    for (auto& d : L.tdoors) {
+        int before = d.shut;
+        d.shut = (int)std::lround(d.len * (1.f - tdoorOpen(L.time, d.phase, L.def->doorPeriod)));
+        if (before == d.len && d.shut < d.len) audio.play(SFX_DOOR, 0.35f, panOf(d.x + 4.f));
+    }
+    // gun turrets: track the nearest visible taxi (slowly, never perfectly) and fire slow bullets
+    for (auto& g : L.guns) {
+        float gx = g.x + 4.f, gy = g.y + 4.f;
+        int best = -1; float bd = 175.f;
+        for (int i = 0; i < MAXP; i++) {
+            const Player& p = P[i];
+            if (!p.joined || !p.alive || p.invuln > 0 || p.landed) continue;     // turrets track taxis in flight
+            float dx = p.cx() - gx, dy = p.cy() - gy, d = std::hypot(dx, dy);
+            if (d >= bd || dx * g.nx + dy * g.ny < 0) continue;          // only in front of the wall it sits on
+            bool clear = true;                                            // line of sight
+            for (float u = 8; u < d - 6 && clear; u += 3) {
+                int x = (int)(gx + dx / d * u), y = (int)(gy + dy / d * u);
+                if (x >= 0 && y >= 0 && x < WW && y < WH && L.solid[y * WW + x]) clear = false;
+            }
+            if (clear) { bd = d; best = i; }
+        }
+        if (best >= 0) {
+            float want = std::atan2(P[best].cy() - gy, P[best].cx() - gx);
+            float da = std::remainder(want - g.aim, 6.2832f);
+            g.aim += std::clamp(da, -1.6f * dt, 1.6f * dt);
+        }
+        g.cd -= dt;
+        if (g.cd < 0.5f && best >= 0) g.warn = 0.5f; else if (g.warn > 0) g.warn -= dt;
+        if (g.cd <= 0) {
+            g.cd = L.def->gunPeriod * rng.r(0.7f, 1.3f);
+            if (best >= 0) {
+                float a = g.aim + rng.r(-0.22f, 0.22f), sp = rng.r(44, 58);
+                L.bullets.push_back({gx + std::cos(a) * 6 - 1, gy + std::sin(a) * 6 - 1, std::cos(a) * sp, std::sin(a) * sp, 7.f});
+                audio.play(SFX_SHOT, 0.45f, panOf(gx));
+            }
+        }
+    }
+    for (auto& b : L.bullets) {
+        b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+        int x = (int)b.x, y = (int)b.y;
+        bool hit = x < 0 || y < 0 || x >= WW - 1 || y >= WH - 1 ||
+                   L.solid[y * WW + x] || L.solid[y * WW + x + 1] || L.solid[(y + 1) * WW + x] || L.solid[(y + 1) * WW + x + 1];
+        if (hit) {
+            for (int k = 0; k < 5; k++) addPart(b.x + 1, b.y + 1, rng.r(-30, 30) - b.vx * 0.3f, rng.r(-30, 30) - b.vy * 0.3f, 0.3f, rgb(255, 200, 80), 30);
+            b.life = 0;
+        }
+    }
+    // bullets vs taxis, pixel exact (2x2 bullet against the drawn taxi): taxis in flight are shot down,
+    // landed taxis are armoured - the bullet ricochets off in a few sparks
+    for (auto& b : L.bullets) {
+        if (b.life <= 0) continue;
+        for (int i = 0; i < MAXP && b.life > 0; i++) {
+            Player& p = P[i];
+            if (!p.joined || !p.alive) continue;
+            int px = (int)std::lround(p.x), py = (int)std::lround(p.y);
+            const uint8_t* m = taxiMask[p.face][p.gearRows()];
+            bool hit = false;
+            for (int j = 0; j < 2 && !hit; j++)
+                for (int k = 0; k < 2; k++) {
+                    int u = (int)b.x + k - px, v = (int)b.y + j - py;
+                    if (u >= 0 && u < 16 && v >= 0 && v < 10 && m[v * 16 + u]) { hit = true; break; }
+                }
+            if (!hit) continue;
+            b.life = 0;
+            if (p.landed) {
+                for (int k = 0; k < 6; k++) addPart(b.x + 1, b.y + 1, rng.r(-40, 40) - b.vx * 0.4f, rng.r(-50, 0), 0.3f, rgb(255, 230, 140), 60);
+                audio.play(SFX_BUMP, 0.3f, panOf(b.x));
+            } else killPlayer(i, "SHOT!");
+        }
+    }
+    L.bullets.erase(std::remove_if(L.bullets.begin(), L.bullets.end(), [](const Level::Bullet& b) { return b.life <= 0; }), L.bullets.end());
+    // storms: lightning now and then
+    if (L.def->weather == 1) {
+        L.boltT -= dt;
+        if (L.flashT > 0) L.flashT -= dt;
+        if (L.boltT <= 0) { L.flashT = 0.35f; L.boltT = rng.r(5.f, 11.f); audio.play(SFX_THUNDER, 0.7f, rng.r(-0.5f, 0.5f)); }
+    }
     // mines
     for (auto& m : L.mines) {
         float ph = L.time / m.d.period + m.d.phase;
@@ -1514,6 +2056,13 @@ static void taxiCollisions() {
 static void updateParticles(float dt) {
     for (auto& p : parts) {
         p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= (1 - 1.5f * dt); p.life -= dt;
+        if (LV.def && gstate != GS_TITLE)
+            for (auto& hd : LV.def->holes) {
+                float dx = hd.x * 8 - p.x, dy = hd.y * 8 - p.y, d = std::max(3.f, std::hypot(dx, dy));
+                float a = hd.pull * 1.5f / (1.f + (d / 56.f) * (d / 56.f));
+                p.vx += a * dx / d * dt; p.vy += a * dy / d * dt;
+                if (d < hd.core) p.life = 0;
+            }
     }
     parts.erase(std::remove_if(parts.begin(), parts.end(), [](const Particle& p) { return p.life <= 0; }), parts.end());
     for (auto& t : ftexts) { t.y -= 14 * dt; t.life -= dt; }
@@ -1548,12 +2097,15 @@ static void newGame() {
         p.score = 0; p.lives = 5; p.nextLife = EXTRA_LIFE_EVERY; p.fuel = FUEL_MAX; p.fares = 0; p.alive = false; p.pass = -1;
     }
     audio.play(SFX_START);
+    int last; setRange(selSet, startLevel_, last);
     startLevel(startLevel_);
 }
 
 // ------------------------------------------------------------------ rendering
-static void blitTaxi(int i, int sx, int sy) {
+static void blitTaxi(int i, int sx, int sy, bool world = false) {
     const Player& p = P[i];
+    // world == true: pixels inside a cloaking field (c tiles) are invisible; only the flames show
+    auto hidden = [&](int x, int y) { return world && LV.hasZones && zoneAt(x >> 3, (y - MAPY) >> 3) == 'c'; };
     bool flash = ((int)(tglobal * 6)) & 1;
     int gearRows = (int)std::lround(p.gearExt);
     for (int y = 0; y < 10; y++) {
@@ -1566,6 +2118,7 @@ static void blitTaxi(int i, int sx, int sy) {
             if (ch == '.') continue;
             uint32_t c = taxiPix(ch, i, flash);
             if (p.fuel <= 0 && ch == 'L') c = rgb(60, 60, 60);
+            if (hidden(sx + x, sy + yy)) continue;
             pset(sx + x, sy + yy, c);
         }
     }
@@ -1729,6 +2282,182 @@ static void passengerCollisions() {
     }
 }
 
+// 128x64 tileable smooth noise, looked up per pixel for the animated fog and water
+// (cheap enough for the PS Vita: one table read instead of a noise evaluation)
+static float NOISE_T[64][128];
+static float noiseT(int x, int y) {
+    static bool built = false;
+    if (!built) {
+        for (int y2 = 0; y2 < 64; y2++)
+            for (int x2 = 0; x2 < 128; x2++) {
+                float v = 0, amp = 0.65f;
+                for (int o = 0; o < 2; o++) {
+                    int cell = o ? 8 : 16, gx = 128 / cell, gy = 64 / cell;     // lattice that wraps around the table
+                    float fx = (float)x2 / cell, fy = (float)y2 / cell;
+                    int xi = (int)fx, yi = (int)fy; float tx = fx - xi, ty = fy - yi;
+                    tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+                    auto L = [&](int i, int j) { return h01(((i % gx) + gx) % gx, ((j % gy) + gy) % gy, 40 + o); };
+                    float a = L(xi, yi), b = L(xi + 1, yi), c = L(xi, yi + 1), d = L(xi + 1, yi + 1);
+                    v += amp * ((a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty);
+                    amp = 0.35f;
+                }
+                NOISE_T[y2][x2] = v;
+            }
+        built = true;
+    }
+    return NOISE_T[y & 63][x & 127];
+}
+
+// level 21-40 features drawn under the passengers and taxis
+static void drawFeatures() {
+    Level& L = LV;
+    const Theme& th = *L.th;
+    float t = L.time;
+    // thrust-dead fields (n) and cloaking fields (c)
+    if (L.hasZones)
+        for (int ty = 0; ty < MH; ty++)
+            for (int tx = 0; tx < MW; tx++) {
+                char z = zoneAt(tx, ty);
+                if (!isZoneC(z)) continue;
+                bool N = zoneAt(tx, ty - 1) != z, S = zoneAt(tx, ty + 1) != z, W = zoneAt(tx - 1, ty) != z, E = zoneAt(tx + 1, ty) != z;
+                for (int py = 0; py < 8; py++)
+                    for (int px = 0; px < 8; px++) {
+                        int x = tx * 8 + px, y = ty * 8 + py + MAPY;
+                        bool edge = (N && py == 0) || (S && py == 7) || (W && px == 0) || (E && px == 7);
+                        if (z == 'n') {
+                            pblend(x, y, rgb(20, 30, 90), 0.22f);
+                            if (((x + y + (int)(t * 10)) & 7) == 0) pblend(x, y, rgb(110, 150, 255), 0.25f);
+                            if (edge && (((x + y) >> 1) & 1)) pblend(x, y, rgb(140, 180, 255), 0.6f);
+                            if (h01(x, y, (int)(t * 12)) < 0.004f) pset(x, y, rgb(200, 230, 255));
+                        } else {   // drifting mist: light fog outdoors, dark murk in caves and space
+                            bool dark = th.bg == 3 || th.bg == 4;
+                            float n = noiseT(x + (int)(t * 6.f), y * 2) * 0.65f + noiseT(x * 2 - (int)(t * 20.f), y * 3 + 17) * 0.35f;
+                            float a = 0.22f + n * 0.35f;
+                            uint32_t mc = dark ? mix(rgb(8, 4, 16), th.accent, 0.08f) : mix(rgb(196, 206, 220), th.skyBot, 0.25f);
+                            if (bayer(x, y) < a * 1.6f) pblend(x, y, mc, a);
+                            if (edge && ((x + y + (int)(t * 8)) & 3) == 0) pblend(x, y, dark ? th.accent : rgb(230, 240, 255), 0.3f);
+                        }
+                    }
+            }
+    // water
+    if (L.hasWater)
+        for (int ty = 0; ty < MH; ty++)
+            for (int tx = 0; tx < MW; tx++) {
+                if (L.tile[ty][tx] != '~') continue;
+                bool surf = L.T(tx, ty - 1) != '~';
+                for (int px = 0; px < 8; px++) {
+                    int x = tx * 8 + px, top = surf ? waterTop(x, t) : 0;
+                    for (int py = top; py < 8; py++) {
+                        int depth = ty * 8 + py - (surf ? ty * 8 + top : 0);
+                        uint32_t c = mix(mix(th.hillNear, th.accent, 0.35f), shade(th.hillNear, 0.5f), std::min(1.f, (ty * 8 + py) / 216.f + (surf ? py / 16.f : 0.4f)));
+                        if (surf && py == top) c = mix(th.accent, rgb(255, 255, 255), 0.55f);
+                        else if (noiseT(x * 2 + (int)(t * 10.f), (ty * 8 + py) * 4) > 0.74f) c = mix(c, th.accent, 0.4f);
+                        (void)depth;
+                        pset(x, ty * 8 + py + MAPY, c);
+                    }
+                }
+            }
+    // slow automatic doors
+    for (auto& d : L.tdoors) {
+        bool moving = d.shut > 0 && d.shut < d.len;
+        for (int a = 0; a < d.len; a++)
+            for (int b = 0; b < 8; b++) {
+                int x = d.vert ? d.x + b : d.x + a, y = (d.vert ? d.y + a : d.y + b) + MAPY;
+                if (a < d.shut) {
+                    uint32_t c = (((a + b * (d.vert ? 1 : -1) + 64) / 3) & 1) ? rgb(70, 74, 88) : rgb(46, 48, 60);
+                    if (b == 0 || b == 7) c = rgb(130, 134, 150);
+                    if (b == 3 || b == 4) c = mix(c, th.accent, 0.35f);
+                    if (a >= d.shut - 2) c = a == d.shut - 1 ? rgb(250, 200, 30) : rgb(30, 30, 30);
+                    pset(x, y, c);
+                } else if (b == 0 || b == 7) pblend(x, y, rgb(130, 134, 150), 0.35f);
+            }
+        if (moving && ((int)(t * 6) & 1)) {
+            int lx = d.vert ? d.x - 1 : d.x, ly = d.vert ? d.y : d.y - 1;
+            pset(lx, ly + MAPY, rgb(255, 170, 40)); pset(d.vert ? d.x + 8 : d.x + d.len - 1, (d.vert ? d.y : d.y - 1) + MAPY, rgb(255, 170, 40));
+        }
+    }
+    // black holes: accretion disk swirling around the deadly core, photon ring
+    for (auto& hd : L.def->holes) {
+        float hx = hd.x * 8, hy = hd.y * 8 + MAPY;
+        for (int k = 0; k < 160; k++) {
+            float rr = hd.core + 1.5f + h01(k, 1, 7) * hd.core * 2.2f;
+            float a = h01(k, 2, 7) * 6.2832f + t * 55.f / rr;
+            float x = hx + std::cos(a) * rr, y = hy + std::sin(a) * rr * 0.38f;
+            if (std::sin(a) < 0 && std::hypot(x - hx, y - hy) < hd.core) continue;   // behind the hole
+            float u = (rr - hd.core) / (hd.core * 2.2f);
+            uint32_t c = u < 0.3f ? rgb(255, 250, 220) : u < 0.6f ? rgb(255, 170, 60) : th.accent;
+            pblend((int)x, (int)y, c, 0.9f - u * 0.5f);
+        }
+        for (int k = 0; k < 48; k++) {
+            float a = k / 48.f * 6.2832f, rr = hd.core + 0.6f;
+            pblend((int)std::lround(hx + std::cos(a) * rr), (int)std::lround(hy + std::sin(a) * rr), rgb(255, 230, 190), 0.35f + 0.25f * std::sin(t * 4 + k));
+        }
+    }
+    // radar dishes: blinking feed and jamming waves showing their range
+    for (auto& r : L.radars) {
+        int x0 = r.x - 8, y0 = r.y - 4 + MAPY;
+        if ((int)(t * 3) & 1) { pset(x0 + 7, y0 + 1, rgb(255, 80, 60)); pset(x0 + 8, y0 + 1, rgb(255, 80, 60)); }
+        for (int k = 0; k < 3; k++) {
+            float rad = std::fmod(t * 34.f + k * JAM_R / 3, JAM_R);
+            int n = (int)(rad * 0.9f) + 6;
+            for (int j = 0; j < n; j++) {
+                float a = j * 6.2832f / n;
+                if ((j & 3) == 3) continue;
+                pblend((int)(r.x + std::cos(a) * rad), (int)(r.y + std::sin(a) * rad) + MAPY, th.accent, 0.3f * (1 - rad / JAM_R));
+            }
+        }
+    }
+    // gun turrets: barrel follows the aim, flashes red just before a shot
+    for (auto& g : L.guns) {
+        float cx = g.x + 3.5f, cy = g.y + 3.5f + MAPY;
+        for (int k = 1; k <= 4; k++)
+            pset((int)std::lround(cx + std::cos(g.aim) * k), (int)std::lround(cy + std::sin(g.aim) * k), k == 4 ? (g.warn > 0 && ((int)(t * 12) & 1) ? rgb(255, 60, 40) : rgb(200, 200, 214)) : rgb(50, 50, 62));
+    }
+    // bullets
+    for (auto& b : L.bullets) {
+        uint32_t c = ((int)(t * 16) & 1) ? rgb(255, 240, 130) : rgb(255, 120, 40);
+        for (int j = -1; j < 3; j++) for (int i = -1; i < 3; i++) pblend((int)b.x + i, (int)b.y + j + MAPY, rgb(255, 120, 40), 0.25f);
+        for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) pset((int)b.x + i, (int)b.y + j + MAPY, c);
+    }
+}
+// wrap v into [0, m) - unlike fmod this stays correct when v goes negative (long play sessions)
+static inline float wrapf(float v, float m) { return v - m * std::floor(v / m); }
+// rain (with lightning), snow or drifting spores, over everything including the taxis
+static void drawWeather() {
+    Level& L = LV;
+    float t = L.time;
+    int w = L.def->weather;
+    if (w == 1) {
+        for (int k = 0; k < 260; k++) {
+            float vy = 280 + h01(k, 3, 1) * 90, vx = -55;
+            float y = wrapf(h01(k, 1, 1) * (WH + 40) + t * vy, (float)(WH + 40)) - 20;
+            float x = wrapf(h01(k, 0, 1) * (WW + 60) + t * vx, (float)(WW + 60)) - 30;
+            for (int s = 0; s < 5; s++)
+                pblend((int)(x - vx * s * 0.004f), (int)(y - vy * s * 0.004f) + MAPY, rgb(176, 196, 232), 0.5f - s * 0.09f);
+        }
+        if (L.flashT > 0) {
+            float a = (L.flashT > 0.22f || (L.flashT < 0.15f && L.flashT > 0.08f)) ? 0.55f : 0.15f;
+            rectb(0, MAPY, WW, WH, rgb(220, 230, 255), a * L.flashT / 0.35f + 0.1f);
+        }
+    } else if (w == 2) {
+        for (int k = 0; k < 320; k++) {
+            float vy = 16 + h01(k, 3, 2) * 22;
+            float y = wrapf(h01(k, 1, 2) * (WH + 10) + t * vy, (float)(WH + 10)) - 5;
+            float x = wrapf(h01(k, 0, 2) * WW + std::sin(t * 1.3f + k) * 5 - t * 9, (float)WW);
+            pblend((int)x, (int)y + MAPY, rgb(255, 255, 255), 0.85f);
+            if (k % 4 == 0) { pblend((int)x + 1, (int)y + MAPY, rgb(255, 255, 255), 0.6f); pblend((int)x, (int)y + 1 + MAPY, rgb(255, 255, 255), 0.6f); }
+        }
+    } else if (w == 3) {
+        for (int k = 0; k < 90; k++) {
+            float y = wrapf(h01(k, 1, 3) * WH - t * (4 + h01(k, 3, 3) * 6), (float)WH);
+            float x = wrapf(h01(k, 0, 3) * WW + std::sin(t * 0.7f + k) * 9, (float)WW);
+            float a = 0.35f + 0.35f * std::sin(t * 3 + k);
+            pblend((int)x, (int)y + MAPY, L.th->accent, a);
+            pblend((int)x + 1, (int)y + MAPY, L.th->accent, a * 0.4f);
+        }
+    }
+}
+
 static void drawWorld() {
     Level& L = LV;
     // static layer
@@ -1747,7 +2476,7 @@ static void drawWorld() {
                     int px, py;
                     if (wx != 0) { px = tx * 8 + ((wx > 0 ? off - s : 7 - off + s) & 7); py = ty * 8 + lane; }
                     else { px = tx * 8 + lane; py = ty * 8 + ((wy > 0 ? off - s : 7 - off + s) & 7); }
-                    pblend(px, py + MAPY, th.accent, 0.35f - s * 0.1f);
+                    pblend(px, py + MAPY, th.bg ? mix(th.accent, rgb(255, 255, 255), 0.6f) : th.accent, (th.bg ? 0.45f : 0.35f) - s * 0.1f);
                 }
             }
         }
@@ -1772,8 +2501,9 @@ static void drawWorld() {
         for (int tx = 0; tx < MW; tx++) {
             char c = L.tile[ty][tx];
             int bx = tx * 8, by = ty * 8 + MAPY;
-            if (c == 'D' || c == 'E') {
-                uint32_t col = c == 'D' ? rgb(255, 60, 60) : rgb(60, 200, 255);
+            if (isDoorC(c)) {
+                uint32_t col = c == 'D' ? rgb(255, 60, 60) : c == 'E' ? rgb(60, 200, 255) : c == 'J' ? rgb(255, 220, 50) :
+                               c == 'j' ? rgb(190, 90, 255) : c == 'K' ? rgb(80, 230, 90) : rgb(255, 140, 40);
                 if (doorSolid(c, L)) {
                     for (int py = 0; py < 8; py++)
                         for (int px = 0; px < 8; px++) {
@@ -1837,7 +2567,10 @@ static void drawWorld() {
     // floor switches: a coloured button on a flat plate. The colour shows which doors are
     // closed (red = red doors, cyan = cyan doors); it is pushed flat while a taxi sits on it.
     for (auto& s : L.switches) {
-        uint32_t col = L.switchOn ? rgb(60, 200, 255) : rgb(255, 60, 60);
+        int ch = L.switchCh[&s - &L.switches[0]];
+        bool on = chanOn(L, ch);
+        uint32_t col = ch == 0 ? (on ? rgb(60, 200, 255) : rgb(255, 60, 60)) : ch == 1 ? (on ? rgb(190, 90, 255) : rgb(255, 220, 50))
+                                                                               : (on ? rgb(255, 140, 40) : rgb(80, 230, 90));
         bool pressed = false;
         for (auto& p : P) if (p.joined && p.alive && switchPressedBy(p, s)) pressed = true;
         int sy = s.y + MAPY;
@@ -1853,6 +2586,23 @@ static void drawWorld() {
         if (p.pad >= 0) {
             const PadE& pd = L.pads[p.pad];
             paintPad(sx, sy, p.w, pd.id, pd.id == 'F', [&](int x, int y, uint32_t c) { pset(x, y, c); });
+        } else if (p.h > 8) {   // moving wall / elevator block: panelled, hazard stripes on the moving edges
+            const uint32_t* m = th.metal;
+            for (int py = 0; py < p.h; py++)
+                for (int px = 0; px < p.w; px++) {
+                    int lx = px & 7, ly = py & 7;
+                    uint32_t c = m[2];
+                    if (lx == 0 || ly == 0) c = m[3];
+                    if (lx == 7 || ly == 7) c = m[1];
+                    if ((lx == 2 || lx == 5) && (ly == 2 || ly == 5)) c = m[4];
+                    bool vmove = p.d.y0 != p.d.y1;
+                    int e = vmove ? std::min(py, p.h - 1 - py) : std::min(px, p.w - 1 - px);
+                    if (e < 3) c = (((px + py) / 3) & 1) ? rgb(250, 200, 30) : rgb(30, 30, 30);
+                    if (py == 0 || px == 0) c = mix(c, m[4], 0.5f);
+                    if (py == p.h - 1 || px == p.w - 1) c = mix(c, m[0], 0.6f);
+                    pset(sx + px, sy + py, c);
+                }
+            continue;
         } else {
             const uint32_t* m = th.metal;
             for (int py = 0; py < 8; py++)
@@ -1907,6 +2657,7 @@ static void drawWorld() {
             }
         if (blink) for (int k = 0; k < 4; k++) pblend(mx + 4 + (k % 2 ? 1 : -1), my + 4 + (k / 2 ? 1 : -1), rgb(255, 60, 60), 0.4f);
     }
+    drawFeatures();
     // passengers
     for (auto& q : PASS) {
         if (q.state == PS_WAIT) {
@@ -1924,7 +2675,11 @@ static void drawWorld() {
         if (p.invuln > 0 && ((int)(tglobal * 15) & 1)) continue;
         int jx = 0, jy = 0;
         if (p.roughT > 0) { jx = rng.i(3) - 1; jy = rng.i(2) - (p.roughT > 0.25f ? 1 : 0); }   // visual shake only
-        blitTaxi(i, (int)std::lround(p.x) + jx, (int)std::lround(p.y) + MAPY + jy);
+        blitTaxi(i, (int)std::lround(p.x) + jx, (int)std::lround(p.y) + MAPY + jy, true);
+        // radar jamming: static crackles over the taxi
+        if (p.jam > 0.05f)
+            for (int k = 0; k < (int)(p.jam * 10); k++)
+                pblend((int)p.x + rng.i(16), (int)p.y + MAPY + rng.i(10), rng.f() < 0.5f ? rgb(255, 255, 255) : rgb(120, 255, 200), 0.7f);
         // little player marker
         if (p.invuln > 0 || gstate == GS_INTRO) drawTinyOutlinedC((int)p.cx(), (int)p.y + MAPY - 7, "P" + std::to_string(i + 1), PCOL[i].light);
     }
@@ -1936,6 +2691,11 @@ static void drawWorld() {
         if (p.size == 1) pblend(x, y, p.c, a);
         else { pblend(x, y, p.c, a); pblend(x + 1, y, p.c, a); pblend(x, y + 1, p.c, a); pblend(x + 1, y + 1, p.c, a); }
     }
+    // foreground layer (taxis behind it are hidden), then the weather on top of everything
+    if (L.hasFg)
+        for (int y = 0; y < WH; y++)
+            for (int x = 0; x < WW; x++) if (uint32_t c = L.fg[y * WW + x]) fb[(y + MAPY) * SW + x] = c;
+    drawWeather();
     // floating texts ("$47", "PAD 3", "CRASH!", ...) in the small 3x5 pixel font with a dark outline
     for (auto& t : ftexts) {
         if (t.life < 0.4f && ((int)(t.life * 20) & 1)) continue;
@@ -2061,8 +2821,7 @@ static void drawTitle() {
             tinyText(x0 + 29 - (int)strlen(src) * 2, y0 + 27, src, [&](int x, int y) { pset(x, y, rgb(200, 200, 220)); });
         } else if ((int)(tglobal * 2 + i * 0.3f) & 1) drawTextC(x0 + 29, y0 + 17, "JOIN", rgb(120, 120, 150), 0);
     }
-    char buf[40]; snprintf(buf, sizeof buf, "< START LEVEL %02d >", startLevel_ + 1);
-    drawTextC(SW / 2, 200, buf, rgb(255, 210, 60));
+    drawTextC(SW / 2, 200, "< " + setLabel(selSet) + " >", rgb(255, 210, 60));
     drawTextC(SW / 2, 212, numJoined() ? "PRESS " START_LABEL " TO PLAY" : "PRESS " JOIN_LABEL " TO JOIN", ((int)(tglobal * 3) & 1) ? rgb(255, 255, 255) : rgb(120, 255, 120));
     drawTextC(SW / 2, 226, "DPAD THRUST  " GEAR_LABEL " GEAR", rgb(140, 140, 170), 0);
 #if defined(__SWITCH__)
@@ -2085,7 +2844,8 @@ static void render() {
         drawTextC(SW / 2, 100, LV.def->name, rgb(170, 230, 255));
         snprintf(buf, sizeof buf, "DELIVER %d FARES", LV.def->quota);
         drawTextC(SW / 2, 114, buf, rgb(255, 255, 255));
-        if (LV.def->gravity < 0.9f) drawTextC(SW / 2, 124, "LOW GRAVITY", rgb(120, 255, 120));
+        if (!LV.def->hint.empty()) drawTextC(SW / 2, 124, LV.def->hint, ((int)(tglobal * 3) & 1) ? rgb(255, 210, 60) : rgb(255, 255, 255));
+        else if (LV.def->gravity < 0.9f) drawTextC(SW / 2, 124, "LOW GRAVITY", rgb(120, 255, 120));
         else if (LV.def->gravity > 1.2f) drawTextC(SW / 2, 124, "HIGH GRAVITY", rgb(255, 120, 120));
         else if (stateT > 1.6f) drawTextC(SW / 2, 124, "GET READY!", ((int)(tglobal * 6) & 1) ? rgb(255, 255, 255) : rgb(255, 210, 60));
     } else if (gstate == GS_DONE) {
@@ -2094,9 +2854,24 @@ static void render() {
         drawStandings(76);
     } else if (gstate == GS_OVER || gstate == GS_WIN) {
         banner(40, 160);
-        if (gstate == GS_OVER) drawFancyText(SW / 2, 50, "GAME OVER", 16, rgb(255, 200, 200), rgb(255, 60, 40), rgb(140, 0, 0), rgb(30, 0, 0));
-        else drawFancyText(SW / 2, 50, "ALL FARES DONE!", 16, rgb(255, 250, 170), rgb(255, 170, 20), rgb(210, 40, 10), rgb(40, 0, 30));
-        drawStandings(80);
+        if (gstate == GS_OVER) { drawFancyText(SW / 2, 50, "GAME OVER", 16, rgb(255, 200, 200), rgb(255, 60, 40), rgb(140, 0, 0), rgb(30, 0, 0)); drawStandings(80); }
+        else {   // a level set is done: congratulate and point to the next one
+            char big[32], l1[48], l2[48];
+            if (selSet >= NREGSETS) {
+                snprintf(big, sizeof big, "CHAMPIONS!");
+                snprintf(l1, sizeof l1, "ALL %d LEVELS COMPLETED!", NLEVELS);
+                snprintf(l2, sizeof l2, "THE FULL CHALLENGE IN ONE GO!");
+            } else {
+                snprintf(big, sizeof big, "SET %d COMPLETE!", selSet + 1);
+                snprintf(l1, sizeof l1, "LEVEL SET %d COMPLETED!", selSet + 1);
+                if (selSet + 1 < NREGSETS) snprintf(l2, sizeof l2, "NOW TRY THE NEXT LEVEL SET!");
+                else snprintf(l2, sizeof l2, "NOW TRY ALL %d LEVELS IN ONE GO!", NLEVELS);
+            }
+            drawFancyText(SW / 2, 50, big, 16, rgb(255, 250, 170), rgb(255, 170, 20), rgb(210, 40, 10), rgb(40, 0, 30));
+            drawTextC(SW / 2, 72, l1, rgb(170, 230, 255));
+            drawTextC(SW / 2, 82, l2, ((int)(tglobal * 2) & 1) ? rgb(120, 255, 120) : rgb(255, 255, 255));
+            drawStandings(98);
+        }
         if (stateT > 2.f) drawTextC(SW / 2, 184, "PRESS " START_LABEL, ((int)(tglobal * 3) & 1) ? rgb(255, 255, 255) : rgb(150, 150, 170));
     } else if (gstate == GS_PAUSE) {
         banner(90, 50);
@@ -2186,7 +2961,7 @@ static bool botFree(int tx, int ty) {
         for (int x = tx - 1; x < tx + 3; x++) {
             if (y < 0) { if (x < 0 || x >= MW) return false; continue; }
             char c = LV.T(x, y);
-            if (isWall(c) || isPadC(c) || c == '=' || c == 'X' || doorSolid(c, LV)) return false;
+            if (isWall(c) || isPadC(c) || c == '=' || c == 'X' || c == 'Z' || c == 'R' || c == '~' || c == 'Y' || c == 'y' || doorSolid(c, LV)) return false;
             if (c == 'G' && LV.gateAnim < 1.f) return false;
         }
     return true;
@@ -2306,6 +3081,7 @@ static bool lobbyPressed(const Lobby& l, bool Input::*b) { return l.cur.*b && !(
 static void update(float dt) {
     tglobal += dt;
     stateT += dt;
+    audio.setEcho(gstate != GS_TITLE && LV.th && LV.th->bg == 3);   // crystal cave levels echo
     switch (gstate) {
         case GS_TITLE: {
             for (auto& l : lobby) {
@@ -2315,8 +3091,8 @@ static void update(float dt) {
                 if (taken && l.src == SRC_PAD && lobbyPressed(l, &Input::b)) {
                     for (auto& p : P) if (p.joined && p.src == l.src && p.jid == l.jid) { p.joined = false; audio.play(SFX_BLIP); }
                 }
-                if (lobbyPressed(l, &Input::l)) { startLevel_ = (startLevel_ + NLEVELS - 1) % NLEVELS; audio.play(SFX_BLIP, 0.5f); }
-                if (lobbyPressed(l, &Input::r)) { startLevel_ = (startLevel_ + 1) % NLEVELS; audio.play(SFX_BLIP, 0.5f); }
+                if (lobbyPressed(l, &Input::l)) { selSet = (selSet + NSETS - 1) % NSETS; audio.play(SFX_BLIP, 0.5f); }
+                if (lobbyPressed(l, &Input::r)) { selSet = (selSet + 1) % NSETS; audio.play(SFX_BLIP, 0.5f); }
                 if (lobbyPressed(l, &Input::start)) {
                     if (!taken && (l.src == SRC_PAD)) joinPlayer(l.src, l.jid);
                     if (numJoined() == 0) joinPlayer(l.src, l.jid);
@@ -2369,7 +3145,8 @@ static void update(float dt) {
         case GS_DONE:
             updateParticles(dt);
             if (stateT > 4.5f) {
-                if (curLevel + 1 >= NLEVELS) { gstate = GS_WIN; stateT = 0; audio.play(SFX_EXTRALIFE); }
+                int first, last; setRange(selSet, first, last);
+                if (curLevel >= last || curLevel + 1 >= NLEVELS) { gstate = GS_WIN; stateT = 0; audio.play(SFX_EXTRALIFE); }
                 else startLevel(curLevel + 1);
             }
             break;
@@ -2378,7 +3155,10 @@ static void update(float dt) {
             updateParticles(dt);
             if (stateT > 2.f)
                 for (auto& l : lobby)
-                    if (lobbyPressed(l, &Input::start) || lobbyPressed(l, &Input::a)) { gstate = GS_TITLE; stateT = 0; audio.play(SFX_BLIP); }
+                    if (lobbyPressed(l, &Input::start) || lobbyPressed(l, &Input::a)) {
+                        if (gstate == GS_WIN && selSet < NREGSETS) selSet++;   // the title now offers the next set (or the complete run)
+                        gstate = GS_TITLE; stateT = 0; audio.play(SFX_BLIP);
+                    }
             break;
     }
 }
@@ -2956,19 +3736,262 @@ static int runSelfTest() {
             spawnT = 999;
             for (size_t si = 0; si < LV.switches.size(); si++) {
                 SDL_Point sw = LV.switches[si];
-                bool before = LV.switchOn;
+                auto state = [] { return (LV.switchOn ? 1 : 0) | (LV.chOn[1] ? 2 : 0) | (LV.chOn[2] ? 4 : 0); };
+                int before = state();
                 LV.switchCd = 0;
                 Player& p = P[0];
                 p = Player(); p.joined = true; p.alive = true; p.lives = 99; p.face = 0; p.gear = true; p.gearExt = 2; p.fuel = 50; p.airT = 9;
                 p.x = sw.x - 4.f; p.y = sw.y + 8 - 10 - 6.f; p.vx = 0; p.vy = 15; p.cur = p.prev = Input();
                 for (int t = 0; t < 120 && p.alive && !p.landed; t++) { rebuildMasks(); updateTaxi(0, 1 / 60.f); }
-                bool ok = p.alive && p.landed && LV.switchOn != before;
+                bool ok = p.alive && p.landed && state() == (before ^ (1 << LV.switchCh[si]));   // exactly its own channel
                 tries++; if (ok) good++;
-                if (getenv("SWDBG")) printf("  L%d switch %zu at %d,%d: alive=%d landed=%d toggled=%d\n", L + 1, si, sw.x, sw.y, p.alive, p.landed, LV.switchOn != before);
+                if (getenv("SWDBG")) printf("  L%d switch %zu at %d,%d: alive=%d landed=%d toggled=%d\n", L + 1, si, sw.x, sw.y, p.alive, p.landed, state() != before);
             }
         }
         printf("floor switches: %d of %d switches toggled by a centred, gentle landing\n", good, tries);
         if (good != tries) fails++;
+    }
+    // 19) levels 21-40 mechanics
+    {
+        auto fresh = [&](int L) {
+            for (int k = 0; k < MAXP; k++) P[k] = Player();
+            P[0].joined = true; P[0].lives = 99;
+            startLevel(L); gstate = GS_PLAY;
+            for (auto& q : PASS) q = Passenger();
+            spawnT = 999;
+            Player& p = P[0];
+            p = Player(); p.joined = true; p.alive = true; p.lives = 99; p.gear = false; p.gearExt = 0; p.fuel = 100; p.airT = 9;
+            return std::ref(p);
+        };
+        auto findLevel = [&](auto pred) { for (int L = 20; L < NLEVELS; L++) { startLevel(L); if (pred()) return L; } return -1; };
+        int bad = 0;
+        // black hole: pulls a drifting taxi in, the core kills
+        int Lh = findLevel([] { return !LV.def->holes.empty(); });
+        {
+            Player& p = fresh(Lh); const HoleDef& hd = LV.def->holes[0];
+            p.x = hd.x * 8 + 40 - 8; p.y = hd.y * 8 - 5;
+            float d0 = std::hypot(p.cx() - hd.x * 8, p.cy() - hd.y * 8);
+            for (int t = 0; t < 30; t++) { updateWorld(1 / 60.f); updateTaxi(0, 1 / 60.f); }
+            float d1 = std::hypot(p.cx() - hd.x * 8, p.cy() - hd.y * 8);
+            bool pulled = p.alive && d1 < d0 - 2 && p.vx < -5;
+            for (int t = 0; t < 600 && p.alive; t++) { updateWorld(1 / 60.f); updateTaxi(0, 1 / 60.f); }
+            bool swallowed = !p.alive;
+            printf("black hole (L%d): pulled in %.1f -> %.1f px: %s, swallowed: %s\n", Lh + 1, d0, d1, pulled ? "yes" : "NO", swallowed ? "yes" : "NO");
+            if (!pulled || !swallowed) bad++;
+        }
+        // thrust-dead field: full throttle inside does nothing and burns no fuel
+        int Ln = findLevel([] { for (int y = 0; y < MH; y++) for (int x = 0; x < MW; x++) if (LV.tile[y][x] == 'n') return true; return false; });
+        {
+            Player& p = fresh(Ln);
+            int zx = -1, zy = -1;
+            for (int y = 0; y < MH && zx < 0; y++) for (int x = 0; x < MW; x++) if (LV.tile[y][x] == 'n' && LV.T(x + 1, y + 1) == 'n' && LV.T(x + 2, y + 2) == 'n' && LV.T(x - 1, y) == 'n') { zx = x; zy = y; break; }
+            p.x = zx * 8 - 4.f; p.y = zy * 8 + 3.f; p.vy = 0;
+            p.cur.u = true; float f0 = p.fuel;
+            for (int t = 0; t < 10; t++) updateTaxi(0, 1 / 60.f);
+            bool dead = p.vy > 3 && p.fuel == f0 && !p.thU;
+            printf("dead field (L%d): full thrust inside -> falling at %.1f px/s, fuel used %.1f: %s\n", Ln + 1, p.vy, f0 - p.fuel, dead ? "ok" : "WRONG");
+            if (!dead) bad++;
+        }
+        // cloaking field: no taxi pixel is drawn inside it, the flame still is
+        int Lc = findLevel([] { for (int y = 0; y < MH; y++) for (int x = 0; x < MW; x++) if (LV.tile[y][x] == 'c') return true; return false; });
+        {
+            Player& p = fresh(Lc);
+            int zx = -1, zy = -1;
+            for (int y = 0; y < MH && zx < 0; y++) for (int x = 0; x < MW; x++) if (LV.tile[y][x] == 'c' && LV.T(x + 2, y + 1) == 'c' && LV.T(x, y + 1) == 'c') { zx = x; zy = y; break; }
+            p.x = zx * 8.f; p.y = zy * 8.f; p.thU = true;
+            const uint32_t KEY = 0xFF123456u;
+            for (auto& px : fb) px = KEY;
+            blitTaxi(0, zx * 8, zy * 8 + MAPY, true);
+            int body = 0, flame = 0;
+            for (int y = 0; y < 7; y++) for (int x = 0; x < 16; x++) if (fb[(zy * 8 + y + MAPY) * SW + zx * 8 + x] != KEY) body++;   // the engine flame starts on row 7
+            for (int y = 7; y < 14; y++) for (int x = 6; x < 10; x++) if (fb[(zy * 8 + y + MAPY) * SW + zx * 8 + x] != KEY) flame++;
+            printf("cloak (L%d): %d body pixels visible, %d flame pixels visible: %s\n", Lc + 1, body, flame, body == 0 && flame > 0 ? "ok" : "WRONG");
+            if (body || !flame) bad++;
+        }
+        // slow automatic doors: solid exactly where drawn, and they open and close
+        int Ld = findLevel([] { return !LV.tdoors.empty(); });
+        {
+            fresh(Ld);
+            int mism = 0, states = 0; bool sawOpen = false, sawShut = false;
+            const uint32_t KEY = 0xFF123456u;
+            for (int k = 0; k < 24; k++) {
+                LV.time = k * LV.def->doorPeriod / 24.f;
+                for (auto& d : LV.tdoors) { d.shut = (int)std::lround(d.len * (1.f - tdoorOpen(LV.time, d.phase, LV.def->doorPeriod))); if (d.shut == 0) sawOpen = true; if (d.shut == d.len) sawShut = true; }
+                rebuildMasks();
+                for (auto& px : fb) px = KEY;
+                drawFeatures();
+                for (auto& d : LV.tdoors)
+                    for (int a = 0; a < d.len; a++) for (int b = 1; b < 7; b++) {
+                        int x = d.vert ? d.x + b : d.x + a, y = d.vert ? d.y + a : d.y + b;
+                        bool drawn = fb[(y + MAPY) * SW + x] != KEY && (fb[(y + MAPY) * SW + x] >> 24) == 0xFF && a < d.len && (a < d.shut);
+                        if (drawn != (bool)LV.solid[y * WW + x]) mism++;
+                    }
+                states++;
+            }
+            printf("timed doors (L%d): %d states, %d mask/drawing mismatches, open %s, shut %s\n", Ld + 1, states, mism, sawOpen ? "yes" : "NO", sawShut ? "yes" : "NO");
+            if (mism || !sawOpen || !sawShut) bad++;
+        }
+        // water: deadly exactly where the water is drawn
+        int Lw = findLevel([] { return LV.hasWater; });
+        {
+            fresh(Lw);
+            const uint32_t KEY = 0xFF123456u; int mism = 0, cells = 0;
+            for (int k = 0; k < 6; k++) {
+                LV.time = k * 0.37f; rebuildMasks();
+                for (auto& px : fb) px = KEY;
+                drawFeatures();
+                for (int ty = 0; ty < MH; ty++) for (int tx = 0; tx < MW; tx++) if (LV.tile[ty][tx] == '~')
+                    for (int py = 0; py < 8; py++) for (int px = 0; px < 8; px++) {
+                        int x = tx * 8 + px, y = ty * 8 + py; cells++;
+                        if ((fb[(y + MAPY) * SW + x] != KEY) != (bool)LV.haz[y * WW + x]) mism++;
+                    }
+            }
+            printf("water (L%d): %d pixels checked over 6 wave phases, %d mask/drawing mismatches\n", Lw + 1, cells, mism);
+            if (mism) bad++;
+        }
+        // turrets: fire at a taxi in flight in front of them, never at parked taxis; bullets are deadly and stop at walls
+        int Lg = findLevel([] { return !LV.guns.empty(); });
+        {
+            Player& p = fresh(Lg); Level::Gun g0 = LV.guns[0];
+            p.x = g0.x + g0.nx * 60 - 4; p.y = g0.y + g0.ny * 60 - 1; p.invuln = 0; p.hoverT = 0;
+            for (auto& g : LV.guns) g.cd = 99;
+            LV.guns[0].cd = 0.6f;
+            bool fired = false;
+            for (int t = 0; t < 80; t++) { p.vx = p.vy = 0; updateWorld(1 / 60.f); if (!LV.bullets.empty()) fired = true; }
+            // a bullet flying into a taxi in flight kills it, into a landed taxi it just ricochets
+            auto shootAt = [&](bool landed) {
+                Player& t = fresh(Lg); t.invuln = 0; t.landed = landed; t.x = 100; t.y = 100; t.face = 0; t.gear = landed; t.gearExt = landed ? 2.f : 0.f;
+                for (auto& g : LV.guns) g.cd = 99;
+                LV.bullets.clear(); LV.bullets.push_back({t.x - 20, t.y + 5, 50, 0, 5});
+                for (int k = 0; k < 60 && t.alive && !LV.bullets.empty(); k++) updateWorld(1 / 60.f);
+                return t.alive;
+            };
+            bool deadly = !shootAt(false);
+            bool armoured = shootAt(true);
+            int left = 0;
+            for (int t = 0; t < 600; t++) { p.alive = false; updateWorld(1 / 60.f); }
+            left = (int)LV.bullets.size();
+            Player& q = fresh(Lg);
+            q.x = g0.x + g0.nx * 60 - 4; q.y = g0.y + g0.ny * 60 - 1; q.landed = true;
+            for (auto& g : LV.guns) g.cd = 99;
+            LV.guns[0].cd = 0.3f;
+            for (int t = 0; t < 60; t++) updateWorld(1 / 60.f);
+            bool parkedSafe = LV.bullets.empty();
+            printf("turrets (L%d): fires at a flying taxi %s, kills a flying taxi %s, landed taxi immune %s, bullets gone after hitting walls %s, parked taxi not targeted %s\n",
+                   Lg + 1, fired ? "yes" : "NO", deadly ? "yes" : "NO", armoured ? "yes" : "NO", left == 0 ? "yes" : "NO", parkedSafe ? "yes" : "NO");
+            if (!fired || !deadly || !armoured || left || !parkedSafe) bad++;
+        }
+        // radar dishes: jam flying taxis nearby (controls fire by themselves), not parked ones or far ones
+        int Lr = findLevel([] { return !LV.radars.empty(); });
+        {
+            Player& p = fresh(Lr); SDL_Point r = LV.radars[0];
+            int glitches = 0, parkedGlitches = 0, farGlitches = 0;
+            for (int t = 0; t < 300; t++) {
+                p.x = r.x - 8.f; p.y = r.y - 40.f; p.vx = p.vy = 0; p.alive = true; p.landed = false; p.cur = Input(); p.fuel = 100;
+                updateTaxi(0, 1 / 60.f); if (p.thU || p.thL || p.thR || p.thD) glitches++;
+            }
+            for (int t = 0; t < 300; t++) {
+                p.x = r.x - 8.f; p.y = r.y - 40.f; p.vx = p.vy = 0; p.alive = true; p.landed = true; p.cur = Input();
+                updateTaxi(0, 1 / 60.f); if (p.thU || p.thL || p.thR || p.thD) parkedGlitches++;
+            }
+            for (int t = 0; t < 300; t++) {
+                p.x = r.x + 100.f; p.y = r.y - 100.f; p.vx = p.vy = 0; p.alive = true; p.landed = false; p.cur = Input();
+                updateTaxi(0, 1 / 60.f); if (p.thU || p.thL || p.thR || p.thD) farGlitches++;
+            }
+            printf("radar (L%d): jammed thrusts near the dish %d/300, parked %d/300, far away %d/300\n", Lr + 1, glitches, parkedGlitches, farGlitches);
+            if (glitches < 20 || parkedGlitches || farGlitches) bad++;
+        }
+        // mid-air spawn: hangs still until the player thrusts, then flies
+        int La = findLevel([] { return !LV.def->air.empty(); });
+        {
+            Player& p = fresh(La);
+            Slot s{-1, 0, 0}; for (auto& sl : LV.slots) if (sl.pad < 0) { s = sl; break; }
+            placeOnSlot(p, s); p.invuln = 2.5f;
+            float y0 = p.y;
+            for (int t = 0; t < 90; t++) updateTaxi(0, 1 / 60.f);
+            bool still = p.alive && p.y == y0 && !p.landed;
+            p.cur.u = true;
+            for (int t = 0; t < 20; t++) updateTaxi(0, 1 / 60.f);
+            bool flies = p.alive && p.y < y0 - 0.5f;
+            printf("mid-air spawn (L%d): hangs still %s, flies on thrust %s\n", La + 1, still ? "yes" : "NO", flies ? "yes" : "NO");
+            if (!still || !flies) bad++;
+        }
+        // moving walls: solid exactly where drawn
+        int Lm = findLevel([] { for (auto& pl : LV.plats) if (pl.h > 8) return true; return false; });
+        {
+            fresh(Lm);
+            int mism = 0, checked = 0;
+            for (int k = 0; k < 8; k++) {
+                for (int t = 0; t < 40; t++) updateWorld(1 / 60.f);
+                std::vector<uint8_t> wallMask(WW * WH, 0);
+                for (auto& pl : LV.plats) if (pl.h > 8) for (int y = 0; y < pl.h; y++) for (int x = 0; x < pl.w; x++) wallMask[(pl.y + y) * WW + pl.x + x] = 1;
+                render();
+                for (int y = 0; y < WH; y++) for (int x = 0; x < WW; x++) if (wallMask[y * WW + x]) { checked++; if (!LV.solid[y * WW + x]) mism++; }
+            }
+            printf("moving walls (L%d): %d wall pixels checked over 8 positions, %d not solid\n", Lm + 1, checked, mism);
+            if (mism || !checked) bad++;
+        }
+        // weather keeps falling during long sessions (rain used to drift off-screen after ~110 s)
+        {
+            int Lw2 = findLevel([] { return LV.def->weather == 1; });
+            fresh(Lw2);
+            bool ok = true;
+            const uint32_t KEY = 0xFF123456u;
+            for (float tt : {1.f, 120.f, 600.f, 3600.f}) {
+                LV.time = tt; LV.flashT = 0;
+                for (auto& px : fb) px = KEY;
+                drawWeather();
+                int drawn = 0; for (int i = 0; i < SW * WH; i++) if (fb[i] != KEY) drawn++;
+                if (drawn < 500) ok = false;
+            }
+            printf("weather: rain still falling after 1 s, 2 min, 10 min and 1 h: %s\n", ok ? "yes" : "NO");
+            if (!ok) bad++;
+        }
+        // level wind strength: Cavern Stairway's wind drifts a taxi left; landing works when you lean into it
+        {
+            int Ls = findLevel([] { return LV.def->wind < 0.99f; });
+            Player& p = fresh(Ls);
+            p.x = 200; p.y = 40; p.gear = true; p.gearExt = 2;
+            for (int t = 0; t < 60; t++) { p.vy = 0; updateTaxi(0, 1 / 60.f); }
+            float drift = -p.vx, expect = 70 * LV.def->wind * (1 - std::exp(-0.55f)) / 0.55f;
+            bool ok = p.alive && std::fabs(drift - expect) < 1.f;
+            // drop the gear while still moving right at 10 px/s and sink onto pad 3: the wind brakes the drift, safe landing
+            Player& q = fresh(Ls);
+            const PadE& pd = LV.pads[padByChar('3')];
+            q.x = pd.x + pd.w / 2.f - 8; q.y = pd.y - 10 - 12.f; q.gear = true; q.gearExt = 2; q.vx = 10; q.vy = 22;
+            for (int t = 0; t < 120 && q.alive && !q.landed; t++) updateTaxi(0, 1 / 60.f);
+            bool lands = q.alive && q.landed;
+            printf("wind (L%d, strength %.0f%%): gear-down drift after 1 s %.1f px/s left (expected %.1f), landing while leaning into it: %s\n",
+                   Ls + 1, LV.def->wind * 100, drift, expect, lands ? "ok" : "CRASH");
+            if (!ok || !lands) bad++;
+        }
+        // every new level builds, has its spawn slots, and uses one of the four new graphics sets
+        int sets[NTHEMES] = {};
+        for (int L = 20; L < NLEVELS; L++) { startLevel(L); sets[LV.def->theme]++; if ((int)LV.slots.size() < MAXP || LV.th->bg == 0) bad++; }
+        printf("levels 21-%d: graphics sets oil rig %d, jungle %d, cave %d, void %d\n", NLEVELS, sets[7], sets[8], sets[9], sets[10]);
+        if (bad) fails++;
+    }
+    // 20) level sets: 5 levels each, the last regular set takes the rest, one complete set; finishing a set ends the game
+    {
+        bool ok = NSETS == NREGSETS + 1;
+        std::vector<int> covered(NLEVELS, 0);
+        for (int s2 = 0; s2 < NREGSETS; s2++) { int a, b; setRange(s2, a, b); for (int L = a; L <= b; L++) covered[L]++; if (b - a + 1 < 5) ok = false; }
+        for (int c : covered) if (c != 1) ok = false;
+        int a, b; setRange(NREGSETS, a, b); if (a != 0 || b != NLEVELS - 1) ok = false;
+        // play the end of set 2: the level after its last one must not start, the win screen comes up instead
+        int saveSet = selSet; selSet = 1; setRange(selSet, a, b);
+        for (int k = 0; k < MAXP; k++) P[k] = Player();
+        P[0].joined = true; P[0].lives = 5;
+        startLevel(b); gstate = GS_DONE; stateT = 0;
+        for (int t = 0; t < 400 && gstate == GS_DONE; t++) update(1 / 60.f);
+        bool endsAtSet = gstate == GS_WIN && curLevel == b;
+        selSet = NREGSETS; startLevel(b); gstate = GS_DONE; stateT = 0;
+        for (int t = 0; t < 400 && gstate == GS_DONE; t++) update(1 / 60.f);
+        bool completeGoesOn = gstate == GS_INTRO && curLevel == b + 1;
+        selSet = saveSet; gstate = GS_TITLE;
+        printf("level sets: %d sets + complete (%s ... %s), set 2 ends after level %d: %s, complete set carries on: %s\n",
+               NREGSETS, setLabel(0).c_str(), setLabel(NREGSETS - 1).c_str(), b + 1, endsAtSet ? "yes" : "NO", completeGoesOn ? "yes" : "NO");
+        if (!ok || !endsAtSet || !completeGoesOn) fails++;
     }
     printf(fails ? "SELFTEST FAILED (%d)\n" : "SELFTEST PASSED\n", fails);
     return fails ? 1 : 0;
@@ -2976,7 +3999,7 @@ static int runSelfTest() {
 
 int main(int argc, char** argv) {
     // debug / test modes
-    int shotLevel = -1, shotFrames = 240, shotPlayers = 5; const char* shotPath = nullptr; bool passShot = false, titleShot = false, iconShot = false, selfTest = false, sceneShot = false, dmgShot = false, liveShot = false;
+    int shotLevel = -1, shotFrames = 240, shotPlayers = 5; const char* shotPath = nullptr; int setShot = -1; bool passShot = false, titleShot = false, iconShot = false, selfTest = false, sceneShot = false, dmgShot = false, liveShot = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--shot") && i + 2 < argc) { shotLevel = atoi(argv[i + 1]) - 1; shotPath = argv[i + 2]; i += 2; headless = true; }
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) shotFrames = atoi(argv[++i]);
@@ -2988,6 +4011,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--dmg-shot") && i + 1 < argc) { dmgShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--livearea-shot") && i + 1 < argc) { liveShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--title-shot") && i + 1 < argc) { titleShot = true; shotPath = argv[++i]; headless = true; }
+        else if (!strcmp(argv[i], "--set-shot") && i + 2 < argc) { setShot = atoi(argv[i + 1]) - 1; shotPath = argv[i + 2]; i += 2; headless = true; }
         else if (!strcmp(argv[i], "--passengers-shot") && i + 1 < argc) { passShot = true; shotPath = argv[++i]; headless = true; }
         else if (!strcmp(argv[i], "--icon-shot") && i + 1 < argc) { iconShot = true; shotPath = argv[++i]; headless = true; }
     }
@@ -3112,6 +4136,13 @@ int main(int argc, char** argv) {
             }
             saveShot(shotPath); return 0;
         }
+        if (setShot >= 0) {   // "level set complete" screen for set N (1-based; NSETS = the complete set)
+            selSet = std::min(setShot, NSETS - 1);
+            int a, b; setRange(selSet, a, b);
+            for (int i = 0; i < 3; i++) { P[i] = Player(); P[i].joined = true; P[i].score = 420 - i * 130; P[i].fares = 9 - i * 2; }
+            startLevel(b); gstate = GS_WIN; stateT = 3; tglobal = 1.2f;
+            render(); saveShot(shotPath); return 0;
+        }
         if (titleShot) {
             for (int i = 0; i < 3; i++) { P[i].joined = true; P[i].src = SRC_KEYA + (i % 2); }
             tglobal = 1.2f;
@@ -3130,6 +4161,7 @@ int main(int argc, char** argv) {
             for (int f = 0; f < shotFrames; f++) {
                 pollInputs();
                 update(1.f / 60.f);
+                if (getenv("RENDER_EVERY_FRAME")) render();     // for timing the renderer
                 if (botMode && getenv("BOTDBG") && f % 60 == 0) {
                     int w = 0; for (auto& q : PASS) if (q.state == PS_WAIT) w++;
                     printf("  t=%3d x=%6.1f y=%6.1f vx=%6.1f vy=%6.1f land=%d pad=%d pass=%d alive=%d fuel=%.0f wait=%d del=%d\n", f / 60, P[0].x, P[0].y, P[0].vx, P[0].vy, P[0].landed, P[0].landPad, P[0].pass, P[0].alive, P[0].fuel, w, LV.delivered);

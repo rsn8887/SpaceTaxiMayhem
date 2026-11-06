@@ -3,7 +3,7 @@ Space Taxi Mayhem
 
 A multiplayer Space Taxi game with 1-5 local players, inspired by the Amiga PD classic Space Taxi 3.
 
-Pick up passengers, land gently and without sliding sideways on the pad they call out, and don't crash into walls, hazards, other taxis or the passengers themselves. There are 20 levels with switches, moving platforms, lasers, wind and teleporters. Passengers come in all kinds: men, women, quick kids with high voices and slow old folks with walking sticks, each with a voice of their own. Fly with the D-pad and remember that you can't thrust sideways while the landing gear (A/B) is down.
+Pick up passengers, land gently and without sliding sideways on the pad they call out, and most importantly don't crash. There are 41 levels, divided into 8 level sets, with many features such as switches, moving platforms, lasers, wind, and many more. Passengers come in all kinds: men, women, quick kids with high voices and slow old folks with walking sticks, each with a voice of their own. Fly with the D-pad and remember that you can't thrust sideways while the landing gear (A/B) is down.
 
 ![Title screen](screenshots/title.png)
 ![In-game](screenshots/ingame.png)
@@ -52,7 +52,7 @@ cmake --build build -j
 This builds `Space Taxi Mayhem.app`. To make a self-contained app that can be copied to the Applications folder on any Mac (SDL libraries included), or a .dmg to share:
 ```
 cmake --install build --prefix dist     # -> dist/Space Taxi Mayhem.app
-cd build && cpack                        # -> SpaceTaxiMayhem-1.2.0-macOS.dmg
+cd build && cpack                        # -> SpaceTaxiMayhem-1.3.0-macOS.dmg
 ```
 The app is ad-hoc signed but not notarized, so on another Mac open it the first time with right-click → Open (or run `xattr -dr com.apple.quarantine "/Applications/Space Taxi Mayhem.app"`).
 

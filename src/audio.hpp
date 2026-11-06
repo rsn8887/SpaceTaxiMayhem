@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <SDL.h>
 #include <vector>
+#include <atomic>
 #include <string>
 #include <deque>
 #include <cmath>
@@ -13,7 +14,7 @@ enum Sfx {
     SFX_GEAR_DOWN, SFX_GEAR_UP, SFX_LAND, SFX_EXPLODE, SFX_PICKUP, SFX_TIP,
     SFX_FUEL, SFX_SWITCH, SFX_DOOR, SFX_TELEPORT, SFX_GATE, SFX_LEVELDONE,
     SFX_GAMEOVER, SFX_EXTRALIFE, SFX_BLIP, SFX_JOIN, SFX_LOWFUEL, SFX_LASER,
-    SFX_BUMP, SFX_START, SFX_ROUGH, SFX_COUNT
+    SFX_BUMP, SFX_START, SFX_ROUGH, SFX_SHOT, SFX_JAM, SFX_THUNDER, SFX_COUNT
 };
 
 enum VoiceClip { VC_HEY, VC_UP, VC_THANKS, VC_OUCH, VC_PAD1, VC_COUNT = VC_PAD1 + 9 };
@@ -81,6 +82,8 @@ public:
         ch[p].target = vol * 0.55f * sfxVol; ch[p].pan = pan;
         SDL_UnlockAudioDevice(dev);
     }
+    // cave echo on/off (see cb); safe to call every frame
+    void setEcho(bool on) { echoOn.store(on ? 1 : 0, std::memory_order_relaxed); }
     void silenceThrust() { for (int i = 0; i < NTHRUST; i++) thrust(i, 0, 0); }
 
     // Passenger voices are queued so they never talk over each other.
@@ -112,6 +115,10 @@ private:
     Sample sfx[SFX_COUNT];
     Sample thrustLoop;
     Sample voices[NVOICES][VC_COUNT];
+    // cave echo state (audio thread)
+    static const int DL_LEN = (int)(0.35f * RATE);
+    std::vector<float> dl, send; int dlPos = 0; float lpL = 0, lpR = 0, echoWet = 0;
+    std::atomic<int> echoOn{0};
     std::deque<VQ> vq;
 
     void startNextVoice() {
@@ -122,8 +129,14 @@ private:
     }
 
     static void cbStatic(void* ud, Uint8* stream, int len) { ((Audio*)ud)->cb((float*)stream, len / (int)sizeof(float) / 2); }
+    // Cave echo: a stereo ping-pong delay (~0.2 s / 0.29 s) with darkening feedback. Every sound
+    // effect and voice is sent into it, the thrusters only lightly. setEcho() is safe to call every
+    // frame from the game thread; the effect fades in and out smoothly.
+
     void cb(float* out, int frames) {
         for (int i = 0; i < frames * 2; i++) out[i] = 0;
+        if ((int)send.size() < frames * 2) send.resize(frames * 2);
+        for (int i = 0; i < frames * 2; i++) send[i] = 0;
         for (int c = 0; c < NCH; c++) {
             Chan& h = ch[c];
             if (!h.active || !h.s || h.s->d.empty()) continue;
@@ -135,6 +148,7 @@ private:
                     if (k + 1 >= d.size()) { h.active = false; break; }
                     float f = (float)(h.fpos - k), v = (d[k] + (d[k + 1] - d[k]) * f) * h.vol;
                     out[i * 2] += v * lg; out[i * 2 + 1] += v * rg;
+                    send[i * 2] += v * lg; send[i * 2 + 1] += v * rg;
                     h.fpos += h.rate;
                 }
                 if (!h.active) startNextVoice();
@@ -147,8 +161,27 @@ private:
                 }
                 float v = d[h.pos++] * h.vol;
                 out[i * 2] += v * lg; out[i * 2 + 1] += v * rg;
+                float sg = c < NTHRUST ? 0.25f : 1.f;          // thrusters: only a little echo
+                send[i * 2] += v * lg * sg; send[i * 2 + 1] += v * rg * sg;
             }
             if (c == 5 && !h.active) startNextVoice();
+        }
+        // cave echo
+        if (dl.empty()) { dl.assign(DL_LEN * 2, 0.f); dlPos = 0; }
+        float target = echoOn.load(std::memory_order_relaxed) ? 1.f : 0.f;
+        if (echoWet > 0.0001f || target > 0) {
+            const int dL = (int)(0.205f * RATE), dR = (int)(0.29f * RATE);
+            const float fb = 0.42f, damp = 0.32f, wetGain = 0.55f;
+            for (int i = 0; i < frames; i++) {
+                echoWet += (target - echoWet) * 0.00012f;
+                float yL = dl[((dlPos + DL_LEN - dL) % DL_LEN) * 2], yR = dl[((dlPos + DL_LEN - dR) % DL_LEN) * 2 + 1];
+                lpL += (yL - lpL) * damp; lpR += (yR - lpR) * damp;          // each repeat a bit darker
+                dl[dlPos * 2] = send[i * 2] * echoWet + lpR * fb;              // ping-pong between the sides
+                dl[dlPos * 2 + 1] = send[i * 2 + 1] * echoWet + lpL * fb;
+                out[i * 2] += lpL * wetGain; out[i * 2 + 1] += lpR * wetGain;
+                dlPos = (dlPos + 1) % DL_LEN;
+            }
+            if (target == 0 && echoWet <= 0.0001f) { std::fill(dl.begin(), dl.end(), 0.f); lpL = lpR = 0; echoWet = 0; }
         }
         for (int i = 0; i < frames * 2; i++) {      // soft clip
             float x = out[i];
@@ -253,6 +286,22 @@ private:
         sfx[SFX_LOWFUEL] = seq({{1200,1},{0,1},{1200,1}}, 0.06f, 0, 0.2f, 10.f);
         sfx[SFX_LASER] = gen(0.25f, [](float t, float& p, float&) {
             p += (1600.f - t * 5000.f) / RATE; return sq(p) * 0.12f * (1 - t / 0.25f); });
+        // gun turret: short "pew" with a noisy attack
+        sfx[SFX_SHOT] = gen(0.16f, [](float t, float& p, float& lp) {
+            p += (900.f - t * 4500.f) / RATE; lp += (frand() - lp) * 0.5f;
+            return (sq(p) * 0.16f + lp * 0.25f * std::exp(-t * 60.f)) * (1 - t / 0.16f); });
+        // radar jamming: crackly static bursts
+        sfx[SFX_JAM] = gen(0.3f, [](float t, float& p, float& lp) {
+            lp += (frand() - lp) * 0.6f; p += 60.f / RATE;
+            float gate = sq(p * 3.f) > 0 ? 1.f : 0.25f;
+            return lp * 0.35f * gate * std::sin(3.14159f * t / 0.3f); });
+        // thunder: long low rumble
+        sfx[SFX_THUNDER] = gen(2.4f, [](float t, float& lp, float& p) {
+            float cut = 0.08f * std::exp(-t * 1.2f) + 0.004f;
+            lp += (frand() - lp) * cut;
+            p += 0.7f / RATE;
+            float swell = std::min(1.f, t * 8.f) * std::exp(-t * 1.1f) * (0.7f + 0.3f * std::sin(p * 6.2832f * 3.f));
+            return lp * 9.f * swell; });
     }
 
     bool loadClip(const std::string& path, Sample& out) {
