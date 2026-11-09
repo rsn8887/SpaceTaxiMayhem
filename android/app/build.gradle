@@ -1,0 +1,70 @@
+plugins {
+    id 'com.android.application'
+}
+
+// The game's source tree (src/ and assets/). android/build.sh passes it with -PgameSrc;
+// the default works when this folder is opened from inside the project.
+def gameSrc = file(project.findProperty('gameSrc') ?: "${rootDir}/..")
+def appVersion = (project.findProperty('appVersion') ?: '1.4.0').toString()
+def v = appVersion.tokenize('.').collect { it as int }
+
+// Release signing: android/build.sh passes a keystore (created once next to the APK if
+// you don't bring your own). Without one, the release APK is signed with the debug key.
+def ksFile = project.findProperty('keystoreFile')
+def hasKeystore = ksFile && file(ksFile).exists()
+
+android {
+    namespace 'com.rsn8887.spacetaximayhem'
+    compileSdk 34
+    ndkVersion '26.3.11579264'
+
+    defaultConfig {
+        applicationId 'com.rsn8887.spacetaximayhem'
+        minSdk 21
+        targetSdk 34
+        versionCode v[0] * 10000 + v[1] * 100 + v[2]
+        versionName appVersion
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=c++_static", "-DGAME_SRC=${gameSrc.absolutePath}"
+                abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'jni/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    sourceSets {
+        main {
+            assets.srcDirs = ["${gameSrc.absolutePath}/assets"]
+        }
+    }
+
+    signingConfigs {
+        if (hasKeystore) {
+            release {
+                storeFile file(ksFile)
+                storePassword project.findProperty('keystorePassword') ?: ''
+                keyAlias project.findProperty('keyAlias') ?: ''
+                keyPassword project.findProperty('keyPassword') ?: ''
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig hasKeystore ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}

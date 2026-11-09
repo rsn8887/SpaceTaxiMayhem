@@ -43,6 +43,14 @@ docker run --rm --platform linux/arm64 -v "$(pwd)":/app -w /app spacetaxi-linux-
 ```
 This creates `build-linux-arm64/spacetaxi` with its `assets` folder next to it. On the Pi, install SDL2 and SDL2_ttf with `sudo apt install libsdl2-2.0-0 libsdl2-ttf-2.0-0`.
 
+- Android (Docker; for Android handhelds with built-in controls, e.g. AYANEO Pocket Air Mini, Retroid Pocket, Anbernic, or a phone with a controller):
+```
+docker build --platform linux/amd64 -t spacetaxi-android ./spacetaxi/docker/android
+docker run --rm --platform linux/amd64 -v "$(pwd)":/app -w /app -v spacetaxi-gradle:/root/.gradle spacetaxi-android \
+  sh ./spacetaxi/android/build.sh build-android
+```
+This creates `build-android/SpaceTaxiMayhem-1.4.0.apk` (arm64, armv7 and x86-64), which you copy to the device and install (allow installing from unknown sources). The first build downloads the Gradle plugins into the `spacetaxi-gradle` volume, so later builds are faster. The first build also creates `build-android/spacetaxi-release.keystore`, the key the APK is signed with. Keep it, because an installed APK can only be updated by one signed with the same key. The game needs a gamepad or built-in controls; there are no touch controls. On Apple Silicon Macs the image runs under x86-64 emulation, because the Android NDK only exists for x86-64 Linux.
+
 - MacOS:
 ```
 brew install cmake sdl2 sdl2_ttf

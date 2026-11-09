@@ -1,0 +1,4 @@
+// Space Taxi Mayhem - Android (see android/build.sh and docker/android/Dockerfile)
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

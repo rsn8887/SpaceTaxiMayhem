@@ -13,6 +13,9 @@
 #   cmake -S . -B build-vita -DPLATFORM=VITA && cmake --build build-vita
 #   -> build-vita/SpaceTaxiMayhem.vpk  (assets/ packed in as app0:/assets)
 #
+# Android: Gradle project in android/ (uses this version number), built with
+#   sh android/build.sh  inside the docker/android image -> build-android/SpaceTaxiMayhem-<version>.apk
+#
 # Passing devkitPro's toolchain directly works too:
 #   cmake -B build-switch -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/Switch.cmake
 #   (or use the aarch64-none-elf-cmake wrapper)

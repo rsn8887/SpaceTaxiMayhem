@@ -3379,11 +3379,11 @@ static Input readSrc(int src, SDL_JoystickID jid) {
     } else if (src == SRC_KEYA && keys) {
         in.u = keys[SDL_SCANCODE_UP]; in.d = keys[SDL_SCANCODE_DOWN]; in.l = keys[SDL_SCANCODE_LEFT]; in.r = keys[SDL_SCANCODE_RIGHT];
         in.a = keys[SDL_SCANCODE_SPACE] || keys[SDL_SCANCODE_RCTRL]; in.b = keys[SDL_SCANCODE_RSHIFT];
-        in.start = keys[SDL_SCANCODE_RETURN]; in.back = keys[SDL_SCANCODE_ESCAPE];
+        in.start = keys[SDL_SCANCODE_RETURN]; in.back = keys[SDL_SCANCODE_ESCAPE] || keys[SDL_SCANCODE_AC_BACK];
     } else if (src == SRC_KEYB && keys) {
         in.u = keys[SDL_SCANCODE_W]; in.d = keys[SDL_SCANCODE_S]; in.l = keys[SDL_SCANCODE_A]; in.r = keys[SDL_SCANCODE_D];
         in.a = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_LCTRL]; in.b = keys[SDL_SCANCODE_Q];
-        in.start = keys[SDL_SCANCODE_RETURN]; in.back = keys[SDL_SCANCODE_ESCAPE];
+        in.start = keys[SDL_SCANCODE_RETURN]; in.back = keys[SDL_SCANCODE_ESCAPE] || keys[SDL_SCANCODE_AC_BACK];
     }
     return in;
 }
@@ -4614,12 +4614,18 @@ int main(int argc, char** argv) {
 #ifdef __SWITCH__
     romfsInit();
 #endif
+#ifdef __ANDROID__
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");     // Back = Esc (pause / quit from title)
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     if (TTF_Init() != 0) { fprintf(stderr, "TTF_Init: %s\n", TTF_GetError()); return 1; }
 #if defined(__SWITCH__)
     assetDir = "romfs:/";
 #elif defined(__vita__)
     assetDir = "app0:/assets/";          // packed into the .vpk
+#elif defined(__ANDROID__)
+    assetDir = "";                       // relative paths are read from the APK's assets
 #else
     char* base = SDL_GetBasePath();
     std::string baseDir = base ? base : "./";
@@ -4635,7 +4641,7 @@ int main(int argc, char** argv) {
     font16 = TTF_OpenFont(fontPath.c_str(), 16);
     font24 = TTF_OpenFont(fontPath.c_str(), 24);
     if (!font8) fprintf(stderr, "warning: font not found (%s)\n", fontPath.c_str());
-#if !defined(__SWITCH__) && !defined(__vita__)
+#if !defined(__SWITCH__) && !defined(__vita__) && !defined(__ANDROID__)
     SDL_GameControllerAddMappingsFromFile((assetDir + "gamecontrollerdb.txt").c_str());
 #endif
 
@@ -4780,6 +4786,8 @@ int main(int argc, char** argv) {
     SDL_Window* win = SDL_CreateWindow("Space Taxi Mayhem", 0, 0, 1280, 720, 0);   // always fullscreen 720p
 #elif defined(__vita__)
     SDL_Window* win = SDL_CreateWindow("Space Taxi Mayhem", 0, 0, 960, 544, 0);    // Vita screen
+#elif defined(__ANDROID__)
+    SDL_Window* win = SDL_CreateWindow("Space Taxi Mayhem", 0, 0, SW * 2, SH * 2, SDL_WINDOW_FULLSCREEN);  // whole screen
 #else
     SDL_Window* win = SDL_CreateWindow("Space Taxi Mayhem", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SW * 3, SH * 3, SDL_WINDOW_RESIZABLE);
 #endif
@@ -4835,9 +4843,12 @@ int main(int argc, char** argv) {
                     fullscreen = !fullscreen;
                     SDL_SetWindowFullscreen(win, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
                 }
-                if (e.key.keysym.sym == SDLK_ESCAPE && gstate == GS_TITLE) running = false;
-                if (e.key.keysym.sym == SDLK_ESCAPE && gstate == GS_PLAY) { gstate = GS_PAUSE; audio.silenceThrust(); }
+                bool esc = e.key.keysym.sym == SDLK_ESCAPE || e.key.keysym.sym == SDLK_AC_BACK;
+                if (esc && gstate == GS_TITLE) running = false;
+                if (esc && gstate == GS_PLAY) { gstate = GS_PAUSE; audio.silenceThrust(); }
             }
+            // phone / handheld: pause when the app goes to the background (home button, notifications)
+            if (e.type == SDL_APP_WILLENTERBACKGROUND && gstate == GS_PLAY) { gstate = GS_PAUSE; audio.silenceThrust(); }
         }
         Uint64 now = SDL_GetPerformanceCounter();
         acc += (double)(now - last) / SDL_GetPerformanceFrequency();
@@ -4865,6 +4876,7 @@ int main(int argc, char** argv) {
     }
     audio.shutdown();
     for (auto* gc : controllers) SDL_GameControllerClose(gc);
+    controllers.clear();
 #if defined(__vita__) || defined(SHARP_BILINEAR)
     if (tex2x) SDL_DestroyTexture(tex2x);
 #endif
