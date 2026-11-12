@@ -3351,6 +3351,18 @@ static void openController(int deviceIndex) {
     if (SDL_GameController* gc = SDL_GameControllerOpen(deviceIndex)) controllers.push_back(gc);
 }
 
+#ifdef __SWITCH__
+// devkitPro's SDL2 gives a single sideways Joy-Con a different button layout: its stick
+// click arrives as START and its +/- button as BACK. (Its joystick instance IDs are the
+// npad IDs, 0 = player 1 / handheld.)
+static bool isSingleJoyCon(SDL_JoystickID jid) {
+    if (jid < 0 || jid > 7) return false;
+    u32 style = hidGetNpadStyleSet((HidNpadIdType)jid);
+    u32 type = hidGetNpadDeviceType((HidNpadIdType)jid);
+    return !(style & HidNpadStyleTag_NpadJoyDual) && (type & (HidDeviceTypeBits_JoyLeft | HidDeviceTypeBits_JoyRight));
+}
+#endif
+
 static Input readSrc(int src, SDL_JoystickID jid) {
     Input in;
     if (src == SRC_PAD) {
@@ -3371,8 +3383,10 @@ static Input readSrc(int src, SDL_JoystickID jid) {
             in.start = btn(SDL_CONTROLLER_BUTTON_START);
             in.back = btn(SDL_CONTROLLER_BUTTON_BACK);
 #ifdef __SWITCH__
-            // a single Joy-Con has only one of +/-, so either one pauses on Switch
-            in.start = in.start || in.back;
+            // + and - both pause on Switch. On a single sideways Joy-Con only its +/- button
+            // does; its stick click (START there) is ignored, it is too easy to press by accident.
+            if (isSingleJoyCon(jid)) in.start = in.back;
+            else in.start = in.start || in.back;
             in.back = false;
 #endif
         }
