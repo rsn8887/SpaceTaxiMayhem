@@ -5,7 +5,7 @@ plugins {
 // The game's source tree (src/ and assets/). android/build.sh passes it with -PgameSrc;
 // the default works when this folder is opened from inside the project.
 def gameSrc = file(project.findProperty('gameSrc') ?: "${rootDir}/..")
-def appVersion = (project.findProperty('appVersion') ?: '1.4.0').toString()
+def appVersion = (project.findProperty('appVersion') ?: '1.5.0').toString()
 def v = appVersion.tokenize('.').collect { it as int }
 
 // Release signing: android/build.sh passes a keystore (created once next to the APK if
