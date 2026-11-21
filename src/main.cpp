@@ -3227,7 +3227,7 @@ static void drawStandings(int y0) {
     int y = y0;
     for (size_t r = 0; r < ord.size(); r++) {
         int i = ord[r];
-        char buf[48]; snprintf(buf, sizeof buf, "%zu. P%d  $%-7ld %2d FARES", r + 1, i + 1, P[i].score, P[i].fares);
+        char buf[48]; snprintf(buf, sizeof buf, "%d. P%d  $%-7ld %2d FARES", (int)r + 1, i + 1, (long)P[i].score, P[i].fares);
         drawText(40, y, buf, PCOL[i].main);
         y += 11;
     }
@@ -4214,7 +4214,7 @@ static int runSelfTest() {
                 for (int t = 0; t < 120 && p.alive && !p.landed; t++) { rebuildMasks(); updateTaxi(0, 1 / 60.f); }
                 bool ok = p.alive && p.landed && state() == (before ^ (1 << LV.switchCh[si]));   // exactly its own channel
                 tries++; if (ok) good++;
-                if (getenv("SWDBG")) printf("  L%d switch %zu at %d,%d: alive=%d landed=%d toggled=%d\n", L + 1, si, sw.x, sw.y, p.alive, p.landed, state() != before);
+                if (getenv("SWDBG")) printf("  L%d switch %d at %d,%d: alive=%d landed=%d toggled=%d\n", L + 1, (int)si, sw.x, sw.y, p.alive, p.landed, state() != before);
             }
         }
         printf("floor switches: %d of %d switches toggled by a centred, gentle landing\n", good, tries);
@@ -4788,7 +4788,7 @@ int main(int argc, char** argv) {
             deaths += d; delivered += LV.delivered;
             render();
             if (shotLevel >= 0) saveShot(shotPath);
-            printf("level %2d %-16s ok  deaths=%d delivered=%d parts=%zu money=$%ld fuel=%.0f\n", L + 1, LV.def->name.c_str(), d, LV.delivered, parts.size(), P[0].score, P[0].fuel);
+            printf("level %2d %-16s ok  deaths=%d delivered=%d parts=%d money=$%ld fuel=%.0f\n", L + 1, LV.def->name.c_str(), d, LV.delivered, (int)parts.size(), P[0].score, P[0].fuel);
         }
         printf("total deaths %d delivered %d\n", deaths, delivered);
         return 0;
